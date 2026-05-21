@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Build deflate_fingerprint.
+# Defaults to ReleaseFast via `nix build` (sandboxed, deterministic).
+# `./build --debug` for a debug build (uses bare zig build).
+set -uo pipefail
+
+run() { "$@" || { echo "FAILED: $*" >&2; exit 1; }; }
+
+optimize="ReleaseFast"
+if [[ "${1:-}" == "--debug" ]]; then
+	optimize="Debug"
+	shift
+fi
+
+if [[ "$optimize" != "ReleaseFast" ]]; then
+	# Non-release builds use zig directly (local dev only).
+	run zig build "-Doptimize=$optimize" "$@"
+elif command -v nix >/dev/null 2>&1; then
+	run nix build "$@"
+	mkdir -p zig-out/bin
+	run install -m755 result/bin/* zig-out/bin/
+else
+	run zig build "-Doptimize=$optimize" "$@"
+fi

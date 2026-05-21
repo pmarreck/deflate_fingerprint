@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Master test runner for deflate_fingerprint.
+# Runs Zig unit tests + (eventually) CLI integration tests + corpus tests.
+# Exit code = total number of failures across all suites.
+#
+# Per Mecha conventions: never use `set -euo pipefail` in test scripts.
+# `set -e` silently aborts when a command-under-test returns non-zero, which
+# masks the intended-failure paths.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOTAL_FAIL=0
+TOTAL_PASS=0
+
+run_suite() {
+	local name="$1"
+	local cmd="$2"
+	echo ""
+	echo "━━━ $name ━━━"
+	local output
+	output=$(eval "$cmd" 2>&1)
+	local rc=$?
+	local pass fail
+	# Recognize both shell-style "N passed" and Zig's "N/N tests passed".
+	pass=$(echo "$output" | grep -oE '[0-9]+(/[0-9]+)?( tests?)? passed' | head -1 | grep -oE '^[0-9]+' || echo "0")
+	fail=$(echo "$output" | grep -oE '[0-9]+( tests?)? failed' | head -1 | grep -oE '^[0-9]+' || echo "0")
+	if [[ $rc -ne 0 && "$fail" == "0" ]]; then
+		fail=1
+	fi
+	TOTAL_PASS=$((TOTAL_PASS + pass))
+	TOTAL_FAIL=$((TOTAL_FAIL + fail))
+	echo "$output" | tail -5
+}
+
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║       deflate_fingerprint Master Test Suite                 ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+
+# Build first (ReleaseFast for CLI tests; nix-sandboxed).
+echo ""
+echo "Building (ReleaseFast)..."
+"$SCRIPT_DIR/build" 2>&1 | tail -3 \
+	|| { echo "FATAL: build failed"; exit 1; }
+
+# Zig unit tests — `--summary all` makes Zig emit "N/N tests passed"
+# which run_suite's grep can pick up. Without it, Zig is silent on success
+# and the harness would report "0 passed, 0 failed" even when tests pass.
+run_suite "Zig Unit Tests" "nix develop -c zig build test --summary all 2>&1"
+
+# Integration tests (CLI surface) — add as they're written
+for t in "$SCRIPT_DIR"/tests/integration/*.sh; do
+	[[ -f "$t" ]] || continue
+	run_suite "Integration: $(basename "$t")" "bash '$t'"
+done
+
+# Corpus tests (real-world DEFLATE streams + expected fingerprints) — add as they're written
+for t in "$SCRIPT_DIR"/tests/corpus/*.sh; do
+	[[ -f "$t" ]] || continue
+	run_suite "Corpus: $(basename "$t")" "bash '$t'"
+done
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║  TOTAL: $TOTAL_PASS passed, $TOTAL_FAIL failed"
+echo "╚══════════════════════════════════════════════════════════════╝"
+
+exit $TOTAL_FAIL

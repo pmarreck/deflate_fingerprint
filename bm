@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Benchmark runner for deflate_fingerprint.
+# Uses hyperfine (from the flake devshell). ReleaseFast only.
+#
+# Tracks performance of detection-with-early-bailout vs full encode across
+# representative inputs. Outputs to bench/results.jsonl (committed) so we
+# can detect regressions over time.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BENCH_LOG="$SCRIPT_DIR/bench/results.jsonl"
+
+mkdir -p "$SCRIPT_DIR/bench"
+
+echo "Building (ReleaseFast)..."
+"$SCRIPT_DIR/build" 2>&1 | tail -3 \
+	|| { echo "FATAL: build failed"; exit 1; }
+
+# Assert ReleaseFast (DEBUG BUILD warning must not be present per CLAUDE.md).
+DEBUG_CHECK=$("$SCRIPT_DIR/zig-out/bin/deflate-fingerprint" --about 2>&1 || true)
+if echo "$DEBUG_CHECK" | grep -qi "DEBUG BUILD"; then
+	echo "FATAL: benchmarks must not run against a debug build" >&2
+	exit 1
+fi
+
+# TODO: implement benchmark harness once the detection algorithm + encoder are in place.
+# Pattern: hyperfine --export-json /tmp/bm.json '<command>'; append normalized record to bench/results.jsonl
+echo "Benchmark suite not yet implemented (project just scaffolded). See PLAN.md."

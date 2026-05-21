@@ -1,0 +1,17 @@
+.{
+    .name = .deflate_fingerprint,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "include",
+        "cli",
+    },
+    // Zig-suggested fingerprint for the package name `.deflate_fingerprint`.
+    // Lower 32 bits = hash of the name; upper 32 bits = random per-package
+    // (originally generated 2026-05-20 by Zig 0.15.x build system).
+    .fingerprint = 0xd3d6838cb5f67299,
+}

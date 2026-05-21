@@ -1,0 +1,39 @@
+# Zig build artifacts
+zig-out/
+zig-cache/
+.zig-cache/
+
+# Nix build result symlinks
+result
+result-*
+
+# macOS
+.DS_Store
+
+# Editor / tooling
+*.swp
+.vscode/
+.idea/
+
+# Tooling indexes
+.codescan/
+.serena/
+
+# LLM inbox (inter-project messages)
+inbox/
+
+# Local benchmark scratch (committed results live in bench/results.jsonl)
+bench/scratch/
+
+# Personal symlinks to Peter's Obsidian vault (broken for anyone else).
+# Contributors will set up their own agent briefings via this repo's docs.
+AGENTS.md
+CLAUDE.md
+ZIG_RECENT_API_CHANGES.md
+jj_cheatsheet.md
+
+# Local LLM accounting / mistakes / desires (per Peter's continuous-improvement
+# convention — kept out of the public repo).
+MISTAKES.md
+DESIRES.md
+LEARNINGS.md
