@@ -21,9 +21,13 @@ run_suite() {
 	output=$(eval "$cmd" 2>&1)
 	local rc=$?
 	local pass fail
-	# Recognize both shell-style "N passed" and Zig's "N/N tests passed".
-	pass=$(echo "$output" | grep -oE '[0-9]+(/[0-9]+)?( tests?)? passed' | head -1 | grep -oE '^[0-9]+' || echo "0")
-	fail=$(echo "$output" | grep -oE '[0-9]+( tests?)? failed' | head -1 | grep -oE '^[0-9]+' || echo "0")
+	# Recognize multiple summary formats:
+	#   - shell-style "N passed" / "N failed"
+	#   - Zig --summary all success: "N/N tests passed"
+	#   - Zig --summary all failure: "N pass, N fail (M total)"
+	# So we accept "pass" and "passed" (and the same for fail).
+	pass=$(echo "$output" | grep -oE '[0-9]+(/[0-9]+)?( tests?)? pass(ed)?' | head -1 | grep -oE '^[0-9]+' || echo "0")
+	fail=$(echo "$output" | grep -oE '[0-9]+( tests?)? fail(ed)?' | head -1 | grep -oE '^[0-9]+' || echo "0")
 	if [[ $rc -ne 0 && "$fail" == "0" ]]; then
 		fail=1
 	fi

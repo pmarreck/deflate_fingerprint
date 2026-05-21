@@ -12,10 +12,20 @@
 
 const std = @import("std");
 
-// TODO: import sibling modules once they exist.
-// const encoder = @import("encoder.zig");
-// const identify_mod = @import("identify.zig");
-// const registry = @import("registry.zig");
+// Sibling modules. Imported here so their tests are reachable from the
+// `zig build test` root (`src/lib.zig`). A top-level `pub const` import is
+// not sufficient for test discovery — Zig's test runner only collects `test`
+// blocks reachable from the root file, so we explicitly ref them in a `test`
+// block below.
+pub const encoder = @import("encoder.zig");
+// const identify_mod = @import("identify.zig");  // TODO when written
+// const registry = @import("registry.zig");      // TODO when written
+
+test {
+    // Pull tests from sibling modules into the `zig build test` run.
+    std.testing.refAllDecls(@This());
+    _ = encoder;
+}
 
 // ─── Public Zig API ──────────────────────────────────────────────────────
 

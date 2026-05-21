@@ -9,8 +9,10 @@
 
 ## v0.1 — Minimal viable (zlib coverage)
 
-- [ ] Set up the parameterized DEFLATE encoder core (`src/encoder.zig`, `src/bitstream.zig`, `src/huffman.zig`, `src/match.zig`, `src/blocks.zig`)
-- [ ] Implement zlib-quirks behavior tables (`src/encoder_zlib.zig`): 9 levels × 5 strategies = 45 fingerprint entries
+- [x] First DEFLATE primitive landed: `encodeFixedHuffmanLiterals` in `src/encoder.zig` — RFC 1951 §3.2.6 fixed-Huffman block with literals only, no LZ77. Includes an LSB-first `BitWriter`. 9 tests pass against real zlib 1.3.2 ground truth (empty, single literal in 8-bit branch, single literal in 9-bit branch, NULs, repeated literals, "Hello, world!", mixed). 2026-05-21
+- [ ] Layer zlib-specific HUFFMAN_ONLY dispatch on top: replicate the `stored_len + 4 <= static_lenb` cost-model decision that picks STORED vs FIXED. Probe #11 (FIXED↔STORED breakpoint) feeds this.
+- [ ] Split into separate `src/bitstream.zig`, `src/huffman.zig`, `src/match.zig`, `src/blocks.zig` modules when a second consumer justifies it (currently all in `src/encoder.zig` to avoid premature abstraction)
+- [ ] Implement zlib-quirks behavior tables (`src/encoder_zlib.zig`): 9 levels × 5 strategies, less the collapses we've already discovered (HUFFMAN_ONLY across all (level, memLevel) = 1 fingerprint)
 - [ ] Build a per-fingerprint fidelity test suite: at *test* time, encode N inputs with real zlib (via `@cImport`), verify our encoder produces byte-equal output for each fingerprint
 - [ ] Implement the detection algorithm (`src/identify.zig`) with early-bailout stream-comparison
 - [ ] Implement registry data file format (`src/registry.zig`)
