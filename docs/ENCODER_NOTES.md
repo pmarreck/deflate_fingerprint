@@ -113,22 +113,17 @@ Stored estimate: `16 + 4 = 20 B`. Comparison `20 <= 20` → stored wins.
 fixed Huffman (6 B output). At n=4: `static_len = 4*9 + 7 = 43`, `opt_lenb =
 (43+3+7)>>3 = 6 B`. Stored estimate: `4 + 4 = 8 B`. 8 > 6 → fixed wins. ✓
 
-**Implication for the fingerprint:** our encoder must replicate this
+**Implication for the fingerprint:** ~~our encoder must replicate this
 suboptimal cost comparison, byte for byte. It is a *zlib quirk*, not RFC
-behavior. The "fingerprint" function for zlib HUFFMAN_ONLY is therefore:
+behavior. The "fingerprint" function for zlib HUFFMAN_ONLY is therefore:~~
 
-```
-for each block-sized chunk:
-    static_lenb = (sum_of_fixed_huffman_literal_bits + 7 + 3) >> 3  # bytes
-    if (chunk_len + 4) <= static_lenb:
-        emit STORED block
-    else:
-        emit fixed-Huffman block
-```
-
-This decision logic IS the zlib HUFFMAN_ONLY fingerprint. Replicating it
-exactly is necessary and sufficient (for single-block-sized inputs; multi-
-block behavior needs further probing).
+**CORRECTION 2026-05-21 (probe `zlib_huffman_only_breakpoint.c`):**
+The fixed-vs-stored two-way model above was incomplete. zlib's HUFFMAN_ONLY
+is a **three-way** decision: FIXED vs DYNAMIC vs STORED. The 16-byte
+0xC0..0xCF case picked STORED only because 16 *distinct* symbols make
+dynamic Huffman's tree description expensive (~150+ bits of tree-of-trees).
+For inputs with few distinct symbols, DYNAMIC wins easily — even at modest
+n. See "zlib — HUFFMAN_ONLY: full 3-way decision" below.
 
 ### zlib — HUFFMAN_ONLY: knobs that do NOT affect output
 **Date:** 2026-05-21
@@ -198,5 +193,113 @@ worst-case (8.4375 bits/byte expected for uniform random under fixed
 Huffman), suggesting zlib emits multiple blocks and picks per-block the
 cheaper of stored/fixed/(maybe dynamic). No `00 00 ff ff` SYNC_FLUSH marker
 in the output, so no empty-stored-block separators. Multi-block walking
+in the output, so no empty-stored-block separators. Multi-block walking
 needed to characterize the boundary heuristic — filed as future probe.
+
+### zlib — HUFFMAN_ONLY: full 3-way (FIXED/DYNAMIC/STORED) decision
+**Date:** 2026-05-21
+**Probe:** `bench/probes/zlib_huffman_only_breakpoint.c`
+**Reference version:** zlib 1.3.2
+
+Sweep n=1..32 of all-same-byte inputs under HUFFMAN_ONLY (Z_HUFFMAN_ONLY,
+level=6, raw DEFLATE), observing the BTYPE zlib picks:
+
+| Input              | FIXED for n ≤ | Then switches to |
+|---                 |---            |---                |
+| all-NUL (8-bit lit) | 11            | DYNAMIC (1 symbol → tiny tree) |
+| all-'A' (8-bit lit) | 13            | DYNAMIC |
+| all-0xFF (9-bit lit) | 10           | DYNAMIC |
+| alt 'A'/0xFF (2 sym) | 13           | DYNAMIC |
+| 0xC0..0xCF (16 distinct symbols) | — | STORED at n=16 (basic probe) |
+
+**The actual zlib decision algorithm** (from `trees.c::_tr_flush_block`):
+
+1. Build dynamic literal/length and distance Huffman trees from observed
+   symbol frequencies. (HUFFMAN_ONLY means no LZ77 matches, so only literals
+   0..255 + EOB 256 appear, and the distance tree has a single trivial
+   symbol.)
+2. Compute `opt_len` (bits used by dynamic encoding, *including* the tree
+   description) and `static_len` (bits used by the RFC 1951 §3.2.6 fixed
+   table). Convert to bytes:
+   `opt_lenb = (opt_len + 3 + 7) >> 3`, `static_lenb = (static_len + 3 + 7) >> 3`.
+3. If `static_lenb <= opt_lenb`: `opt_lenb := static_lenb` (fixed wins among
+   the two Huffman options).
+4. **Stored fallback:** if `stored_len + 4 <= opt_lenb` → emit STORED block.
+5. **Fixed:** else if `strategy == Z_FIXED || static_lenb == opt_lenb` → emit FIXED.
+6. **Dynamic:** else → emit DYNAMIC.
+
+Key insight: the `+4` in step 4 omits the BTYPE+padding byte that an actual
+stored block costs, so zlib *slightly under-counts* stored cost — but this
+only triggers when stored is close to the Huffman cost. The main reason
+inputs flip from FIXED to DYNAMIC (or to STORED) is the *Huffman cost
+recomputation*, not the stored offset.
+
+**Why FIXED for very small n, regardless of entropy:**
+At small n, the dynamic-tree description (5+5+4 bit field counts + per-symbol
+code-length codes + bit-length-tree codes) is itself ~30–150 bits — a fixed
+overhead that exceeds the savings dynamic-tree gives over fixed for short
+data. So zlib picks FIXED below some threshold and DYNAMIC above it. The
+exact threshold depends on the symbol distribution.
+
+**Why STORED for 16 *distinct* high-byte symbols (0xC0..0xCF):**
+Many distinct symbols → dynamic tree is large (each non-zero code-length
+entry must be encoded). For 16 distinct symbols at n=16 the dynamic tree
+overhead alone exceeds the savings, AND fixed costs 16*9 + … bits, so neither
+Huffman beats `n + 4` bytes of stored.
+
+**Implication for `encodeZlibHuffmanOnly`:** the fingerprint must implement
+the full 3-way comparison, which requires:
+1. **Symbol frequency accumulation** over the input chunk.
+2. **Dynamic Huffman tree construction** matching zlib's specific algorithm
+   (canonical Huffman with zlib's tie-breaks; the heap-based `pqdownheap` in
+   trees.c).
+3. **Bit-length-tree (code-length code) construction** for the tree-of-trees
+   encoding (RFC 1951 §3.2.7).
+4. **The 3-way cost comparison** above, byte-for-byte equivalent to zlib's.
+5. **Block-boundary placement** if the input exceeds the per-block buffer
+   (default ~16 KB at memLevel=8) — probe #12 will characterize this.
+
+Our existing `encodeFixedHuffmanLiterals` is **the correct primitive for step
+5's FIXED branch**. It is, in itself, a partial zlib HUFFMAN_ONLY fingerprint
+that recognizes inputs where zlib picks fixed (typically n ≤ 10..13 bytes,
+depending on entropy). For *detection* purposes, a partial fingerprint is
+still useful: the detector reads the first 3 bits and bails out if the block
+type doesn't match. The full encoder is needed only for *reproduction*.
+
+### zlib — level=0 (Z_NO_COMPRESSION): pure stored blocks ✅ implemented
+**Date:** 2026-05-21
+**Probe:** `bench/probes/zlib_level0_stored.c`
+**Reference version:** zlib 1.3.2
+**Encoder:** `src/encoder.zig::encodeZlibStored` — 6 tests, all green
+
+zlib at level=0 emits one or more DEFLATE stored blocks. Each block:
+- 1 header byte: bit 0 = BFINAL, bits 1-2 = BTYPE=00, bits 3-7 = zero padding
+- 2 bytes: LE16 LEN
+- 2 bytes: LE16 NLEN = bitwise complement of LEN
+- LEN bytes of raw input data
+
+Maximum block payload: 65535 bytes (max u16 LEN). Inputs longer than that
+are split into ⌈len / 65535⌉ blocks chained — all but the last with
+BFINAL=0, the last with BFINAL=1. Empty input still emits a single BFINAL=1
+block with LEN=0 / NLEN=0xFFFF.
+
+**Byte fixtures** (verified byte-exact against zlib 1.3.2):
+
+| Input              | Bytes (5-byte header + data)                           | Total (B) |
+|---                 |---                                                       |---         |
+| `""`                 | `01 00 00 ff ff`                                       | 5          |
+| `"A"`                | `01 01 00 fe ff 41`                                    | 6          |
+| `"Hello, world!"`    | `01 0d 00 f2 ff` + 13 B of data                        | 18         |
+| 0xC0..0xCF (16 B)    | `01 10 00 ef ff` + 16 B of data                        | 21         |
+| 65535 B              | `01 ff ff 00 00` + 65535 B of data                     | 65540      |
+| 65536 B              | `00 ff ff 00 00` + 65535 B + `01 01 00 fe ff` + 1 B    | 65546      |
+
+**Knobs that don't affect output:** strategy (we used DEFAULT but RLE /
+FIXED / HUFFMAN_ONLY all produce the same level=0 bytes), memLevel,
+windowBits magnitude. Only windowBits sign affects wrapping.
+
+**Implication:** this is the simplest non-trivial zlib fingerprint. The
+encoder is ~30 lines; the corresponding fingerprint registry entry covers
+`zlib level=0` across all (strategy, memLevel, windowBits magnitude)
+combinations. First fingerprint to land in v0.1.
 

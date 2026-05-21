@@ -227,3 +227,135 @@ test "encodeFixedHuffmanLiterals: 0xFE,0xFF,0xFE,0xFF -> all 9-bit branch" {
     defer testing.allocator.free(got);
     try testing.expectEqualSlices(u8, &.{ 0xfb, 0xf7, 0xff, 0xdf, 0x7f, 0x00 }, got);
 }
+
+// ─── encodeZlibStored ─────────────────────────────────────────────────────
+//
+// zlib at level=0 (Z_NO_COMPRESSION) emits one or more DEFLATE stored blocks:
+// each block is 1 header byte (BFINAL bit + BTYPE=00 + 5 zero pad bits) + LE16
+// LEN + LE16 NLEN + LEN raw input bytes. LEN is capped at 65535 (max u16), so
+// inputs larger than 65535 bytes are split into multiple chained blocks. Only
+// the final block has BFINAL=1.
+//
+// Empty input still emits one BFINAL=1 stored block with LEN=0.
+//
+// See docs/ENCODER_NOTES.md "zlib — level=0" and bench/probes/zlib_level0_stored.c.
+
+/// Max LEN field value for a DEFLATE stored block (= 2^16 - 1).
+pub const STORED_BLOCK_MAX_LEN: usize = 0xFFFF;
+
+/// Encode `raw` as a sequence of DEFLATE stored blocks matching zlib at
+/// level=0 / Z_NO_COMPRESSION. Output is raw DEFLATE (no zlib/gzip wrapper).
+/// Caller owns the returned slice.
+pub fn encodeZlibStored(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const block_overhead: usize = 5;
+    const n_blocks: usize = if (raw.len == 0)
+        1
+    else
+        (raw.len + STORED_BLOCK_MAX_LEN - 1) / STORED_BLOCK_MAX_LEN;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.ensureTotalCapacity(allocator, raw.len + n_blocks * block_overhead);
+
+    if (raw.len == 0) {
+        // BFINAL=1, BTYPE=00, 5 padding bits = byte 0x01.
+        try out.appendSlice(allocator, &.{ 0x01, 0x00, 0x00, 0xFF, 0xFF });
+        return out.toOwnedSlice(allocator);
+    }
+
+    var offset: usize = 0;
+    while (offset < raw.len) {
+        const remaining = raw.len - offset;
+        const chunk = @min(remaining, STORED_BLOCK_MAX_LEN);
+        const bfinal: u8 = if (remaining == chunk) 1 else 0;
+        // Header byte: low bit = BFINAL, next 2 bits = BTYPE=00, top 5 bits = pad zeros.
+        try out.append(allocator, bfinal);
+        // LEN (LE16) and NLEN (LE16) = ~LEN.
+        try out.append(allocator, @truncate(chunk & 0xFF));
+        try out.append(allocator, @truncate((chunk >> 8) & 0xFF));
+        const nlen: u16 = ~@as(u16, @intCast(chunk));
+        try out.append(allocator, @truncate(nlen & 0xFF));
+        try out.append(allocator, @truncate((nlen >> 8) & 0xFF));
+        try out.appendSlice(allocator, raw[offset .. offset + chunk]);
+        offset += chunk;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+// Ground truth fixtures captured from bench/probes/zlib_level0_stored.c
+
+test "encodeZlibStored: empty -> single BFINAL=1 block with LEN=0" {
+    const got = try encodeZlibStored(testing.allocator, "");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0x00, 0xFF, 0xFF }, got);
+}
+
+test "encodeZlibStored: single 'A' -> 6 bytes" {
+    const got = try encodeZlibStored(testing.allocator, "A");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x01, 0x01, 0x00, 0xFE, 0xFF, 0x41 }, got);
+}
+
+test "encodeZlibStored: 'Hello, world!' -> 18 bytes" {
+    const got = try encodeZlibStored(testing.allocator, "Hello, world!");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(
+        u8,
+        &.{ 0x01, 0x0d, 0x00, 0xf2, 0xff, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21 },
+        got,
+    );
+}
+
+test "encodeZlibStored: 0xC0..0xCF -> 21 bytes (the input that fooled my earlier model)" {
+    const input = [_]u8{ 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF };
+    const got = try encodeZlibStored(testing.allocator, &input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(
+        u8,
+        &.{ 0x01, 0x10, 0x00, 0xef, 0xff, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf },
+        got,
+    );
+}
+
+test "encodeZlibStored: 65535 B (max LEN) -> single block, 65540 B out" {
+    const n: usize = 65535;
+    const input = try testing.allocator.alloc(u8, n);
+    defer testing.allocator.free(input);
+    for (input, 0..) |*b, i| b.* = @truncate(i & 0xFF);
+
+    const got = try encodeZlibStored(testing.allocator, input);
+    defer testing.allocator.free(got);
+
+    try testing.expectEqual(@as(usize, n + 5), got.len);
+    // Header: BFINAL=1, BTYPE=00.
+    try testing.expectEqual(@as(u8, 0x01), got[0]);
+    // LEN = 65535, NLEN = 0x0000.
+    try testing.expectEqual(@as(u8, 0xFF), got[1]);
+    try testing.expectEqual(@as(u8, 0xFF), got[2]);
+    try testing.expectEqual(@as(u8, 0x00), got[3]);
+    try testing.expectEqual(@as(u8, 0x00), got[4]);
+    try testing.expectEqualSlices(u8, input, got[5..]);
+}
+
+test "encodeZlibStored: 65536 B (max LEN + 1) -> 2 blocks" {
+    const n: usize = 65536;
+    const input = try testing.allocator.alloc(u8, n);
+    defer testing.allocator.free(input);
+    for (input, 0..) |*b, i| b.* = @truncate(i & 0xFF);
+
+    const got = try encodeZlibStored(testing.allocator, input);
+    defer testing.allocator.free(got);
+
+    // Block 1: BFINAL=0 (more to come), LEN=65535, then 65535 bytes of data.
+    try testing.expectEqual(@as(u8, 0x00), got[0]);
+    try testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0x00, 0x00 }, got[1..5]);
+    try testing.expectEqualSlices(u8, input[0..65535], got[5 .. 5 + 65535]);
+
+    // Block 2 starts at offset 5 + 65535 = 65540.
+    const b2 = got[65540..];
+    // BFINAL=1, LEN=1, NLEN=0xFFFE, then the one remaining byte.
+    try testing.expectEqual(@as(u8, 0x01), b2[0]);
+    try testing.expectEqualSlices(u8, &.{ 0x01, 0x00, 0xFE, 0xFF }, b2[1..5]);
+    try testing.expectEqual(input[65535], b2[5]);
+    try testing.expectEqual(@as(usize, 65540 + 6), got.len);
+}
