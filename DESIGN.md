@@ -12,6 +12,24 @@ This is the critical design decision. Bundling external encoder libraries at run
 - Forensically reproducible — anyone can read the Zig source and verify a fingerprint
 - Statically linkable; cross-platform without architecture-specific quirks
 
+## Coverage prioritization: open source first
+
+Open-source encoders are the v0.1–v0.2 priority because their algorithms are
+public, the source can be read in full, and ground-truth byte streams can be
+generated on demand from the reference implementation at test time. That
+makes fingerprinting tractable as a normal software task: encode the same
+input through both the reference and our parameterized encoder, diff, iterate
+until byte-equal.
+
+Closed or proprietary encoders (Apple CoreFoundation DEFLATE, .NET
+pre-Brotli-era DeflateStream, undocumented legacy PKZIP variants) require
+empirical reverse-engineering — generating outputs, inferring algorithmic
+choices, sometimes disassembling. Those slip to v0.3+, after the open-source
+coverage establishes baseline fidelity and the tooling has matured.
+
+Order of attack within v0.1–v0.2: zlib → libdeflate → 7-Zip → miniz → Go
+`compress/flate`. All five are fully open, with active maintainers and
+readable source.
 ## High-level algorithm
 
 ```
