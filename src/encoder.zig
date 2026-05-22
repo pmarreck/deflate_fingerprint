@@ -1976,6 +1976,55 @@ pub fn encodeZlibLevel9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return encodeBlockFromTokensWithDynamic(allocator, tokens);
 }
 
+// ─── Z_RLE strategy: matches limited to distance=1 (run-length only) ──────
+//
+// zlib's deflate_rle scans for runs of the byte at strstart-1, emitting a
+// match(length, distance=1) when 3+ bytes match. Hash chains are unused.
+// Levels 1-9 + Z_RLE all collapse to identical output since chain depth
+// and lazy matching are irrelevant when distance is fixed. L0 + Z_RLE
+// emits STORED (covered by fingerprint #1).
+
+fn lz77TokenizeRLE(allocator: std.mem.Allocator, raw: []const u8) ![]Token {
+    var tokens: std.ArrayList(Token) = .empty;
+    errdefer tokens.deinit(allocator);
+    const min_match: usize = 3;
+    const max_match: usize = 258;
+    var pos: usize = 0;
+    while (pos < raw.len) {
+        const lookahead = raw.len - pos;
+        // Need a prior byte and at least MIN_MATCH bytes of lookahead.
+        if (pos == 0 or lookahead < min_match) {
+            try tokens.append(allocator, .{ .literal = raw[pos] });
+            pos += 1;
+            continue;
+        }
+        const prev = raw[pos - 1];
+        if (raw[pos] != prev or raw[pos + 1] != prev or raw[pos + 2] != prev) {
+            try tokens.append(allocator, .{ .literal = raw[pos] });
+            pos += 1;
+            continue;
+        }
+        var len: usize = 3;
+        const cap = @min(max_match, lookahead);
+        while (len < cap and raw[pos + len] == prev) : (len += 1) {}
+        try tokens.append(allocator, .{ .match = .{
+            .length = @intCast(len),
+            .distance = 1,
+        } });
+        pos += len;
+    }
+    return tokens.toOwnedSlice(allocator);
+}
+
+/// zlib Z_RLE strategy (any level 1-9). Tokens are produced by RLE-only
+/// match finding, then encoded via the standard 3-way Huffman dispatcher.
+pub fn encodeZlibRLE(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeRLE(allocator, raw);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+
 // ─── Phase F debug tests ──────────────────────────────────────────────────
 
 test "encodeZlibLevel6: 'longish' input matches zlib L6 byte-exact (DIAGNOSTIC)" {
@@ -2086,4 +2135,25 @@ test "LZ77_LEVEL_2 and LZ77_LEVEL_3 max_lazy_match match zlib config table" {
     try testing.expectEqual(@as(u16, 4), LZ77_LEVEL_1.max_lazy_match);
     try testing.expectEqual(@as(u16, 5), LZ77_LEVEL_2.max_lazy_match);
     try testing.expectEqual(@as(u16, 6), LZ77_LEVEL_3.max_lazy_match);
+}
+
+test "encodeZlibRLE: 80B prose matches zlib Z_RLE byte-exact" {
+    // zlib Z_RLE limits LZ77 matches to distance=1 (run-length only). The
+    // resulting tokens go through the standard 3-way Huffman dispatch.
+    // L1-L9 + Z_RLE all collapse to identical output (chain depth/lazy
+    // don't matter when distance is fixed to 1).
+    const input =
+        "# deflate_fingerprint\n\nIdentify which DEFLATE encoder implementation produced a ";
+    const expected = [_]u8{
+        0x05, 0xc1, 0x41, 0x0a, 0x80, 0x30, 0x0c, 0x04, 0xc0, 0xbb, 0xaf, 0x08,
+        0xf8, 0x12, 0xc1, 0x0a, 0x82, 0x47, 0xef, 0x52, 0x9a, 0xad, 0x0d, 0xb4,
+        0x69, 0x09, 0x11, 0xf1, 0xf7, 0xce, 0xcc, 0xc4, 0xc8, 0x35, 0x3a, 0xae,
+        0x2c, 0x7a, 0xc3, 0x86, 0x89, 0xfa, 0x34, 0xed, 0x0c, 0x75, 0xc9, 0x1f,
+        0xbd, 0x45, 0x52, 0xa1, 0x35, 0x6c, 0xc7, 0x72, 0x06, 0x82, 0xa6, 0xce,
+        0x30, 0x92, 0x36, 0x2a, 0x1a, 0xd4, 0xa3, 0x4b, 0x57, 0x1a, 0xd6, 0xf9,
+        0x49, 0x60, 0x8a, 0xf4, 0x03,
+    };
+    const got = try encodeZlibRLE(testing.allocator, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &expected, got);
 }

@@ -120,6 +120,11 @@ pub const FINGERPRINTS = [_]Fingerprint{
     .{ .id = 18, .description = "zlib level=7 Z_FIXED",                                       .encode = encoder.encodeZlibLevel7Fixed },
     .{ .id = 19, .description = "zlib level=8 Z_FIXED",                                       .encode = encoder.encodeZlibLevel8Fixed },
     .{ .id = 20, .description = "zlib level=9 Z_FIXED",                                       .encode = encoder.encodeZlibLevel9Fixed },
+
+    // ─── Z_RLE strategy: matches limited to distance=1 (run-length only). ──
+    // Levels 1-9 collapse to identical output (chain/lazy params irrelevant).
+    // L0 + Z_RLE emits STORED (covered by fingerprint #1).
+    .{ .id = 21, .description = "zlib Z_RLE (any level 1-9; distance-1 matches only, 3-way Huffman)", .encode = encoder.encodeZlibRLE },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
