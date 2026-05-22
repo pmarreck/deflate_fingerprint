@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    _ = core_mod;
+    // (core_mod is consumed below by the zip-corpus-probe build target.)
 
     // ─── Static library with C ABI (the FFI boundary) ────────────────────
     const lib = b.addLibrary(.{
@@ -56,6 +56,28 @@ pub fn build(b: *std.Build) void {
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
     b.step("run", "Run the deflate-fingerprint CLI").dependOn(&run_cmd.step);
+
+    // ─── ZIP corpus probe (tools/zip_corpus_probe.zig) ───────────────────
+    // Walks a directory of real ZIP-format archives, parses central
+    // directories, runs the identifier on every DEFLATE entry. Links libC
+    // + system zlib for the inflate oracle.
+    const probe_mod = b.createModule(.{
+        .root_source_file = b.path("tools/zip_corpus_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    probe_mod.addImport("deflate_fingerprint", core_mod);
+    probe_mod.linkSystemLibrary("z", .{});
+    const probe = b.addExecutable(.{
+        .name = "zip-corpus-probe",
+        .root_module = probe_mod,
+    });
+    b.installArtifact(probe);
+    const probe_run = b.addRunArtifact(probe);
+    probe_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| probe_run.addArgs(args);
+    b.step("probe", "Run the ZIP corpus probe").dependOn(&probe_run.step);
 
     // ─── Unit tests ──────────────────────────────────────────────────────
     // The test binary links libC + system zlib so tests can `@cImport(zlib.h)`
