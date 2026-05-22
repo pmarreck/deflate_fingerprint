@@ -1150,11 +1150,16 @@ pub const LZ77Params = struct {
 };
 
 /// zlib's `configuration_table[1]`: deflate_fast, greedy, hash-chain depth 4.
+/// The `max_lazy_match` field is repurposed by deflate_fast as
+/// `max_insert_length`: when an emitted match is `<= max_lazy_match`, the
+/// intermediate positions inside the match get inserted into the hash table.
+/// Longer matches skip insertion. Reproducing this is critical for matching
+/// zlib byte-exactly on inputs with many short (3-4 byte) matches.
 pub const LZ77_LEVEL_1: LZ77Params = .{
     .max_chain_length = 4,
     .good_match = 4,
     .nice_match = 8,
-    .max_lazy_match = 0,
+    .max_lazy_match = 4,
 };
 
 /// Tokenize `raw` into a sequence of literal/match tokens via the LZ77
@@ -1223,15 +1228,29 @@ pub fn lz77Tokenize(
         if (match_length >= params.min_match) {
             try tokens.append(allocator, .{ .match = .{ .length = match_length, .distance = match_distance } });
             lookahead -= match_length;
-            // Level 1: max_insert_length = 0 -> skip inserting intermediate
-            // positions during the matched run. Just jump strstart forward.
-            strstart += match_length;
-            // Reset the rolling hash with the two bytes at the new strstart,
-            // so the next iteration's UPDATE_HASH produces the correct value.
-            if (lookahead >= 2) {
-                ins_h = ((@as(u32, raw[strstart]) << params.hash_shift) ^ @as(u32, raw[strstart + 1])) & hash_mask;
-            } else if (lookahead == 1) {
-                ins_h = raw[strstart];
+
+            // zlib's deflate_fast: when `match_length <= max_insert_length`
+            // (which equals max_lazy_match in this struct), insert all
+            // intermediate positions inside the match into the hash chain.
+            // Reproducing this is required for byte-exact match with zlib on
+            // inputs with many short (3-4 byte) matches.
+            if (match_length <= params.max_lazy_match and lookahead >= params.min_match) {
+                var i: u16 = 1;
+                while (i < match_length) : (i += 1) {
+                    strstart += 1;
+                    ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[strstart + params.min_match - 1])) & hash_mask;
+                    const ph = head[ins_h];
+                    prev[strstart & win_mask] = ph;
+                    head[ins_h] = @intCast(strstart);
+                }
+                strstart += 1;
+            } else {
+                strstart += match_length;
+                if (lookahead >= 2) {
+                    ins_h = ((@as(u32, raw[strstart]) << params.hash_shift) ^ @as(u32, raw[strstart + 1])) & hash_mask;
+                } else if (lookahead == 1) {
+                    ins_h = raw[strstart];
+                }
             }
         } else {
             try tokens.append(allocator, .{ .literal = raw[strstart] });
