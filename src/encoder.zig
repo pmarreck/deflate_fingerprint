@@ -1886,10 +1886,18 @@ pub fn lz77TokenizeSlow(
                 match_length = result.length;
                 match_start = result.start;
             }
-            // Z_FILTERED rejects matches of length <= 5 (reset to no-match
-            // sentinel). zlib does this *after* longest_match returns, with
-            // the same effect as never having found one.
-            if (params.filtered and match_length >= params.min_match and match_length <= 5) {
+            // zlib's deflate_slow rejects two classes of "short matches":
+            //   1) Z_FILTERED strategy: any match with length <= 5.
+            //   2) TOO_FAR rule (always on): length=3 match with distance > 4096.
+            // Both write match_length back to the no-match sentinel. This is
+            // the SAME conditional in trees.c -- they share the rejection path.
+            const dist: usize = if (match_length >= params.min_match)
+                @intCast(strstart - match_start)
+            else
+                0;
+            const too_far_reject = match_length == params.min_match and dist > 4096;
+            const filtered_reject = params.filtered and match_length >= params.min_match and match_length <= 5;
+            if (too_far_reject or filtered_reject) {
                 match_length = params.min_match - 1;
             }
         }
