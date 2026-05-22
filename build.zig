@@ -73,11 +73,14 @@ pub fn build(b: *std.Build) void {
         .name = "zip-corpus-probe",
         .root_module = probe_mod,
     });
-    // Not installed by default — runs in the dev shell (which has zlib).
-    // Use: `nix develop -c zig build probe -- /path/to/dir [--verbose]`.
+    // Not part of the default install (nix build sandbox doesn't have zlib).
+    // `nix develop -c zig build probe -- /path` runs it in the dev shell.
+    // `nix develop -c zig build probe-install` installs the binary to zig-out/bin.
     const probe_run = b.addRunArtifact(probe);
     if (b.args) |args| probe_run.addArgs(args);
     b.step("probe", "Run the ZIP corpus probe (dev shell only)").dependOn(&probe_run.step);
+    const probe_install = b.addInstallArtifact(probe, .{});
+    b.step("probe-install", "Install zip-corpus-probe to zig-out/bin").dependOn(&probe_install.step);
 
     // ─── Unit tests ──────────────────────────────────────────────────────
     // The test binary links libC + system zlib so tests can `@cImport(zlib.h)`

@@ -293,6 +293,9 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
 }
 
 fn isZipExtension(name: []const u8) bool {
+    // Skip macOS AppleDouble resource-fork sidecars (._foo.zip etc.) — they
+    // are NOT real archives, just metadata blobs that happen to share a name.
+    if (std.mem.startsWith(u8, name, "._")) return false;
     const exts = [_][]const u8{ ".zip", ".docx", ".jar", ".epub", ".odt", ".xlsx", ".pptx", ".apk", ".war", ".ipa" };
     for (exts) |ext| {
         if (name.len >= ext.len) {
