@@ -984,3 +984,117 @@ test "encodeDynamicHuffmanLiterals: alt 'A'/0xFF * 14 (2 distinct lits) matches 
         got,
     );
 }
+
+// ─── Phase D: encodeZlibHuffmanOnly (3-way FIXED / DYNAMIC / STORED) ─────
+//
+// Full zlib HUFFMAN_ONLY fingerprint. Mirrors the decision in trees.c::
+// _tr_flush_block, restricted to single-block inputs (≤ ~16 KB; multi-block
+// boundary heuristic is probe #12 territory).
+//
+// The comparison uses zlib's *bit-level* formulas, not raw byte counts.
+// This matters at sub-byte tie points — notably the 0xC0..0xCF case where
+// stored is actually 21 B but zlib's `stored_len + 4 <= opt_lenb` test
+// (which omits the BTYPE+padding header byte from the stored estimate)
+// considers them tied and prefers STORED.
+//
+//   static_len_bits = sum over input bytes of fixed Huffman length
+//                     + 7 for EOB (fixed code for symbol 256 is 7 bits)
+//   static_lenb     = (static_len_bits + 3 + 7) >> 3      // bytes, with +3 BFINAL/BTYPE
+//   opt_lenb        = byte length of the dynamic encoding (matches zlib's
+//                     own formula since dynamic emits the same way zlib does)
+//
+//   opt_lenb := min(opt_lenb, static_lenb)                // fixed beats dynamic on tie
+//   if (raw.len + 4) <= opt_lenb        -> STORED         // zlib's specific +4 estimate
+//   else if static_lenb == opt_lenb     -> FIXED          // after step 1's tie collapse
+//   else                                -> DYNAMIC
+
+/// Encode `raw` as a single DEFLATE block matching zlib HUFFMAN_ONLY's
+/// 3-way (FIXED / DYNAMIC / STORED) cost-minimizing dispatch. Limited to
+/// single-block inputs (≤ 65535 B; multi-block boundary heuristic TODO).
+pub fn encodeZlibHuffmanOnly(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    // Compute static_lenb without emitting (sum of fixed-Huffman lengths).
+    var static_len_bits: u32 = 7; // EOB symbol 256's fixed code length
+    for (raw) |b| static_len_bits += if (b < 144) @as(u32, 8) else 9;
+    const static_lenb: u32 = (static_len_bits + 3 + 7) >> 3;
+
+    // Build the dynamic block. Its byte length equals zlib's opt_lenb since
+    // both apply the same `(opt_len + 3 + 7) >> 3` rounding implicitly via
+    // bit-stream padding.
+    const dynamic = try encodeDynamicHuffmanLiterals(allocator, raw);
+    errdefer allocator.free(dynamic);
+    var opt_lenb: u32 = @intCast(dynamic.len);
+
+    // Fixed wins over dynamic on tie.
+    if (static_lenb <= opt_lenb) opt_lenb = static_lenb;
+
+    // Stored estimate per zlib's formula (the +4 quirk that omits BTYPE byte).
+    const stored_est: u32 = @intCast(raw.len + 4);
+
+    if (stored_est <= opt_lenb) {
+        allocator.free(dynamic);
+        return try encodeZlibStored(allocator, raw);
+    }
+    if (static_lenb == opt_lenb) {
+        allocator.free(dynamic);
+        return try encodeFixedHuffmanLiterals(allocator, raw);
+    }
+    return dynamic;
+}
+
+// ─── Phase D tests: full HUFFMAN_ONLY fingerprint across the decision tree ─
+
+test "encodeZlibHuffmanOnly: empty input -> FIXED (3-byte minimum, matches existing primitive)" {
+    const got = try encodeZlibHuffmanOnly(testing.allocator, "");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x03, 0x00 }, got);
+}
+
+test "encodeZlibHuffmanOnly: small input -> FIXED branch (n=1, 8-bit literal)" {
+    const got = try encodeZlibHuffmanOnly(testing.allocator, "A");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x73, 0x04, 0x00 }, got);
+}
+
+test "encodeZlibHuffmanOnly: 'Hello, world!' -> FIXED branch" {
+    const got = try encodeZlibHuffmanOnly(testing.allocator, "Hello, world!");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(
+        u8,
+        &.{ 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0xd7, 0x51, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0x51, 0x04, 0x00 },
+        got,
+    );
+}
+
+test "encodeZlibHuffmanOnly: 'A' * 14 -> DYNAMIC branch (zlib's actual choice)" {
+    const input = "A" ** 14;
+    const got = try encodeZlibHuffmanOnly(testing.allocator, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(
+        u8,
+        &.{ 0x05, 0xc1, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x90, 0x36, 0xff, 0x53, 0x00, 0x00, 0x02 },
+        got,
+    );
+}
+
+test "encodeZlibHuffmanOnly: 0xC0..0xCF -> STORED branch (the surprise from the original probe)" {
+    const input = [_]u8{ 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF };
+    const got = try encodeZlibHuffmanOnly(testing.allocator, &input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(
+        u8,
+        &.{ 0x01, 0x10, 0x00, 0xef, 0xff, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf },
+        got,
+    );
+}
+
+test "encodeZlibHuffmanOnly: alternating 'A'/0xFF * 14 -> DYNAMIC branch" {
+    var input: [14]u8 = undefined;
+    for (&input, 0..) |*b, idx| b.* = if (idx & 1 == 1) 0xFF else 'A';
+    const got = try encodeZlibHuffmanOnly(testing.allocator, &input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(
+        u8,
+        &.{ 0x05, 0xc1, 0x01, 0x01, 0x00, 0x00, 0x00, 0x80, 0x90, 0x6d, 0xfd, 0x1f, 0x25, 0x92, 0x24, 0xc9 },
+        got,
+    );
+}

@@ -75,6 +75,11 @@ pub const FINGERPRINTS = [_]Fingerprint{
         .description = "zlib Z_NO_COMPRESSION (level=0, raw DEFLATE stored blocks)",
         .encode = encoder.encodeZlibStored,
     },
+    .{
+        .id = 2,
+        .description = "zlib Z_HUFFMAN_ONLY (any level, any memLevel; 3-way FIXED/DYNAMIC/STORED dispatch)",
+        .encode = encoder.encodeZlibHuffmanOnly,
+    },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
