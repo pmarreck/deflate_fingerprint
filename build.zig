@@ -58,12 +58,18 @@ pub fn build(b: *std.Build) void {
     b.step("run", "Run the deflate-fingerprint CLI").dependOn(&run_cmd.step);
 
     // ─── Unit tests ──────────────────────────────────────────────────────
+    // The test binary links libC + system zlib so tests can `@cImport(zlib.h)`
+    // and assert byte-exact equality against real zlib output directly,
+    // without going through external C helper binaries.
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    test_mod.linkSystemLibrary("z", .{});
     const run_tests = b.addRunArtifact(b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lib.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = test_mod,
     }));
     b.step("test", "Run unit tests").dependOn(&run_tests.step);
 }

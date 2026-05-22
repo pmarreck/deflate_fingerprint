@@ -22,6 +22,10 @@ pub const bitstream = @import("bitstream.zig");
 pub const huffman = @import("huffman.zig");
 pub const match = @import("match.zig");
 pub const blocks = @import("blocks.zig");
+// Test-time only: real-zlib oracle for byte-exact assertions. Pulls in libz
+// (configured via build.zig) and is referenced from the test block only so
+// it doesn't leak into the shipped library API.
+const fidelity = @import("fidelity.zig");
 // const identify_mod = @import("identify.zig");  // TODO when written
 // const registry = @import("registry.zig");      // TODO when written
 
@@ -33,6 +37,7 @@ test {
     _ = huffman;
     _ = match;
     _ = blocks;
+    _ = fidelity;
 }
 
 // ─── Public Zig API ──────────────────────────────────────────────────────
