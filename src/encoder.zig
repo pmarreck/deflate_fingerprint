@@ -1790,8 +1790,8 @@ pub fn encodeBlockFromTokensWithDynamic(
 // for levels 1-3; lazy `deflate_slow` for 4-9. Level 0 (no compression)
 // is handled by encodeZlibStored, not LZ77.
 
-pub const LZ77_LEVEL_2: LZ77Params = .{ .max_chain_length = 8,    .good_match = 4,  .nice_match = 16,  .max_lazy_match = 0 };
-pub const LZ77_LEVEL_3: LZ77Params = .{ .max_chain_length = 32,   .good_match = 4,  .nice_match = 32,  .max_lazy_match = 0 };
+pub const LZ77_LEVEL_2: LZ77Params = .{ .max_chain_length = 8,    .good_match = 4,  .nice_match = 16,  .max_lazy_match = 5 };
+pub const LZ77_LEVEL_3: LZ77Params = .{ .max_chain_length = 32,   .good_match = 4,  .nice_match = 32,  .max_lazy_match = 6 };
 pub const LZ77_LEVEL_4: LZ77Params = .{ .max_chain_length = 16,   .good_match = 4,  .nice_match = 16,  .max_lazy_match = 4 };
 pub const LZ77_LEVEL_5: LZ77Params = .{ .max_chain_length = 32,   .good_match = 8,  .nice_match = 32,  .max_lazy_match = 16 };
 pub const LZ77_LEVEL_6: LZ77Params = .{ .max_chain_length = 128,  .good_match = 8,  .nice_match = 128, .max_lazy_match = 16 };
@@ -1990,4 +1990,100 @@ test "encodeZlibLevel6: 'longish' input matches zlib L6 byte-exact (DIAGNOSTIC)"
         0x0f, 0x00,
     };
     try testing.expectEqualSlices(u8, &expected, got);
+}
+
+// ─── Phase H: Z_FIXED strategy fingerprints ───────────────────────────────
+//
+// Z_FIXED forces BTYPE=01 (fixed Huffman) for every block. STORED can still
+// win when (stored_len + 4) is small enough. zlib's exact rule:
+//   opt_lenb = min(static_lenb, dyn_lenb)
+//   if stored_len + 4 <= opt_lenb -> STORED, else FIXED
+//
+// We approximate using static_lenb only (skipping dyn_lenb computation). This
+// can diverge in the narrow case where dyn_lenb < stored_est <= static_lenb,
+// i.e. small inputs where DYNAMIC would beat STORED beats FIXED. Real-world
+// inputs rarely hit this case; if corpus shows it, replace `encodeBlockFromTokens`
+// here with a Z_FIXED-specific dispatcher that computes dyn_lenb.
+
+pub fn encodeZlibLevel1Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel2Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_2);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel3Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_3);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel4Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_4);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel5Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_5);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel6Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel7Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_7);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel8Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_8);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+pub fn encodeZlibLevel9Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_9);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+test "encodeZlibLevel1Fixed: 80B prose matches zlib Z_FIXED byte-exact" {
+    const input =
+        "# deflate_fingerprint\n\nIdentify which DEFLATE encoder implementation produced a ";
+    const expected = [_]u8{
+        0x53, 0x56, 0x48, 0x49, 0x4d, 0xcb, 0x49, 0x2c, 0x49, 0x8d, 0x4f, 0xcb,
+        0xcc, 0x4b, 0x4f, 0x2d, 0x2a, 0x28, 0xca, 0xcc, 0x2b, 0xe1, 0xe2, 0xf2,
+        0x4c, 0x49, 0xcd, 0x2b, 0xc9, 0x4c, 0xab, 0x54, 0x28, 0xcf, 0xc8, 0x4c,
+        0xce, 0x50, 0x70, 0x71, 0x75, 0xf3, 0x71, 0x0c, 0x71, 0x55, 0x48, 0xcd,
+        0x4b, 0xce, 0x4f, 0x49, 0x2d, 0x52, 0xc8, 0xcc, 0x2d, 0xc8, 0x49, 0xcd,
+        0x05, 0x2a, 0x49, 0x2c, 0xc9, 0xcc, 0xcf, 0x53, 0x28, 0x28, 0xca, 0x4f,
+        0x29, 0x4d, 0x4e, 0x4d, 0x51, 0x48, 0x54, 0x00, 0x00,
+    };
+    const got = try encodeZlibLevel1Fixed(testing.allocator, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &expected, got);
+}
+
+test "LZ77_LEVEL_2 and LZ77_LEVEL_3 max_lazy_match match zlib config table" {
+    // zlib's configuration_table (deflate.c): the `lazy_match` field acts as
+    // `max_insert_length` for deflate_fast (levels 1-3), controlling whether
+    // intermediate hash-chain positions are inserted for short matches.
+    //   L1: lazy=4   L2: lazy=5   L3: lazy=6
+    // Setting it to 0 (the historical bug) means matches never trigger hash
+    // insertion, breaking subsequent match-finding and diverging from zlib.
+    try testing.expectEqual(@as(u16, 4), LZ77_LEVEL_1.max_lazy_match);
+    try testing.expectEqual(@as(u16, 5), LZ77_LEVEL_2.max_lazy_match);
+    try testing.expectEqual(@as(u16, 6), LZ77_LEVEL_3.max_lazy_match);
 }

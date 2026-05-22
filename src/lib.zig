@@ -107,6 +107,19 @@ pub const FINGERPRINTS = [_]Fingerprint{
     .{ .id = 9,  .description = "zlib level=5 DEFAULT_STRATEGY (deflate_slow, lazy 16)",     .encode = encoder.encodeZlibLevel5 },
     .{ .id = 10, .description = "zlib level=7 DEFAULT_STRATEGY (deflate_slow, lazy 32)",     .encode = encoder.encodeZlibLevel7 },
     .{ .id = 11, .description = "zlib level=8 DEFAULT_STRATEGY (deflate_slow, lazy 128)",    .encode = encoder.encodeZlibLevel8 },
+
+    // ─── Z_FIXED strategy: forces BTYPE=01 (fixed Huffman) per block. ───
+    // STORED can still win on small inputs. L0 + Z_FIXED collapses to
+    // fingerprint #1 (zlib emits STORED at level=0 regardless of strategy).
+    .{ .id = 12, .description = "zlib level=1 Z_FIXED (greedy LZ77, force fixed Huffman)",    .encode = encoder.encodeZlibLevel1Fixed },
+    .{ .id = 13, .description = "zlib level=2 Z_FIXED",                                       .encode = encoder.encodeZlibLevel2Fixed },
+    .{ .id = 14, .description = "zlib level=3 Z_FIXED",                                       .encode = encoder.encodeZlibLevel3Fixed },
+    .{ .id = 15, .description = "zlib level=4 Z_FIXED (lazy LZ77, force fixed Huffman)",      .encode = encoder.encodeZlibLevel4Fixed },
+    .{ .id = 16, .description = "zlib level=5 Z_FIXED",                                       .encode = encoder.encodeZlibLevel5Fixed },
+    .{ .id = 17, .description = "zlib level=6 Z_FIXED",                                       .encode = encoder.encodeZlibLevel6Fixed },
+    .{ .id = 18, .description = "zlib level=7 Z_FIXED",                                       .encode = encoder.encodeZlibLevel7Fixed },
+    .{ .id = 19, .description = "zlib level=8 Z_FIXED",                                       .encode = encoder.encodeZlibLevel8Fixed },
+    .{ .id = 20, .description = "zlib level=9 Z_FIXED",                                       .encode = encoder.encodeZlibLevel9Fixed },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
