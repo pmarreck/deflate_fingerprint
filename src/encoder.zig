@@ -1098,3 +1098,468 @@ test "encodeZlibHuffmanOnly: alternating 'A'/0xFF * 14 -> DYNAMIC branch" {
         got,
     );
 }
+
+// ─── Phase E: LZ77 (zlib level=1, greedy) + Huffman emission over tokens ──
+//
+// New code path for LZ77-using strategies. Introduces a Token type so the
+// existing per-block Huffman machinery can be reused for both
+// literals-only inputs (HUFFMAN_ONLY, what we built in Phases A-D) and
+// LZ77-tokenized inputs (DEFAULT_STRATEGY at any level).
+//
+// zlib level=1 parameters (from `configuration_table[1]` in deflate.c):
+//   max_chain_length = 4    (walk at most 4 hash-chain entries)
+//   good_match       = 4    (early-bail when match length ≥ 4)
+//   nice_match       = 8    (accept-immediately at 8+)
+//   max_lazy_match   = 0    (greedy — no lazy deferral)
+//   max_insert_length = 0   (level 1 does NOT hash positions inside an emitted match)
+//
+// Hash: 3-byte rolling hash with shift=5, hash_bits=15 (memLevel=8 default).
+//
+// **Critical zlib quirk**: head[hash] is initialized to 0 (NIL), and the
+// match-attempt check `if (hash_head != NIL ...)` treats 0 as "no chain".
+// Therefore position 0 is *unmatchable*: any chain whose only entry is
+// position 0 looks empty. This makes inputs like "AAAA" emit 4 literals
+// instead of a match (zlib level=1 confirmed empirically — see
+// bench/probes/zlib_level1_lz77.c).
+
+pub const Token = union(enum) {
+    literal: u8,
+    match: Match,
+};
+
+pub const Match = struct {
+    /// 3..258
+    length: u16,
+    /// 1..32768
+    distance: u16,
+};
+
+pub const LZ77Params = struct {
+    min_match: u8 = 3,
+    max_match: u16 = 258,
+    max_chain_length: u32,
+    good_match: u16,
+    nice_match: u16,
+    max_lazy_match: u16,
+    /// log2 of hash-table size. zlib default memLevel=8 -> hash_bits=15.
+    hash_bits: u5 = 15,
+    /// per-byte rolling-hash shift. zlib default memLevel=8 -> hash_shift=5.
+    hash_shift: u5 = 5,
+    /// Power-of-two LZ77 sliding-window size. zlib default = 32768.
+    window_size: usize = 32768,
+};
+
+/// zlib's `configuration_table[1]`: deflate_fast, greedy, hash-chain depth 4.
+pub const LZ77_LEVEL_1: LZ77Params = .{
+    .max_chain_length = 4,
+    .good_match = 4,
+    .nice_match = 8,
+    .max_lazy_match = 0,
+};
+
+/// Tokenize `raw` into a sequence of literal/match tokens via the LZ77
+/// algorithm parameterized by `params`. Matches zlib's `deflate_fast` for
+/// level=1 (and is the foundation for levels 2-3; lazy matching for 4-9
+/// adds one extra position of lookbehind).
+pub fn lz77Tokenize(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+) ![]Token {
+    var tokens: std.ArrayList(Token) = .empty;
+    errdefer tokens.deinit(allocator);
+
+    if (raw.len == 0) return tokens.toOwnedSlice(allocator);
+
+    const hash_size: usize = @as(usize, 1) << params.hash_bits;
+    const hash_mask: u32 = @intCast(hash_size - 1);
+    const win_mask: usize = params.window_size - 1;
+
+    var head = try allocator.alloc(u32, hash_size);
+    defer allocator.free(head);
+    @memset(head, 0); // NIL = 0
+    var prev = try allocator.alloc(u32, params.window_size);
+    defer allocator.free(prev);
+    @memset(prev, 0);
+
+    var strstart: usize = 0;
+    var lookahead = raw.len;
+    var ins_h: u32 = 0;
+
+    // Pre-load the rolling hash with the first two bytes (zlib's
+    // `if (s->lookahead >= MIN_MATCH-1) { UPDATE_HASH(...) twice }` at start).
+    if (lookahead >= 2) {
+        ins_h = ((@as(u32, raw[0]) << params.hash_shift) ^ @as(u32, raw[1])) & hash_mask;
+    } else if (lookahead == 1) {
+        ins_h = raw[0];
+    }
+
+    while (lookahead > 0) {
+        var hash_head: u32 = 0; // NIL
+        if (lookahead >= params.min_match) {
+            // Mix in window[strstart + MIN_MATCH - 1] to complete the hash
+            // for the 3-byte prefix at strstart.
+            ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[strstart + params.min_match - 1])) & hash_mask;
+            hash_head = head[ins_h];
+            prev[strstart & win_mask] = hash_head;
+            head[ins_h] = @intCast(strstart);
+        }
+
+        var match_length: u16 = 0;
+        var match_distance: u16 = 0;
+        if (hash_head != 0 // NIL check — note 0 is the sentinel; position 0 is unmatchable
+            and strstart > hash_head
+            and (strstart - hash_head) <= params.window_size
+            and lookahead >= params.min_match)
+        {
+            const ml = longestMatch(raw, strstart, hash_head, prev, params, lookahead, win_mask);
+            if (ml >= params.min_match) {
+                match_length = ml;
+                match_distance = @intCast(strstart - hash_head);
+            }
+        }
+
+        if (match_length >= params.min_match) {
+            try tokens.append(allocator, .{ .match = .{ .length = match_length, .distance = match_distance } });
+            lookahead -= match_length;
+            // Level 1: max_insert_length = 0 -> skip inserting intermediate
+            // positions during the matched run. Just jump strstart forward.
+            strstart += match_length;
+            // Reset the rolling hash with the two bytes at the new strstart,
+            // so the next iteration's UPDATE_HASH produces the correct value.
+            if (lookahead >= 2) {
+                ins_h = ((@as(u32, raw[strstart]) << params.hash_shift) ^ @as(u32, raw[strstart + 1])) & hash_mask;
+            } else if (lookahead == 1) {
+                ins_h = raw[strstart];
+            }
+        } else {
+            try tokens.append(allocator, .{ .literal = raw[strstart] });
+            lookahead -= 1;
+            strstart += 1;
+        }
+    }
+
+    return tokens.toOwnedSlice(allocator);
+}
+
+/// Walk the hash chain starting at `cur_match`, returning the longest match
+/// length found at any chain entry. Honors `params.max_chain_length` and
+/// `params.nice_match` for early termination.
+fn longestMatch(
+    raw: []const u8,
+    strstart: usize,
+    cur_match_in: u32,
+    prev: []const u32,
+    params: LZ77Params,
+    lookahead: usize,
+    win_mask: usize,
+) u16 {
+    var chain_length = params.max_chain_length;
+    var best_len: u16 = params.min_match - 1;
+    const max_len: u16 = @intCast(@min(@as(usize, params.max_match), lookahead));
+    var cur_match: usize = cur_match_in;
+
+    while (true) {
+        // Don't try to match if cur_match is at or past strstart (forward refs invalid).
+        if (cur_match >= strstart) break;
+
+        // Count matching bytes from raw[strstart] vs raw[cur_match].
+        var n: u16 = 0;
+        while (n < max_len and raw[strstart + n] == raw[cur_match + n]) : (n += 1) {}
+        if (n > best_len) {
+            best_len = n;
+            if (n >= params.nice_match) break;
+        }
+
+        chain_length -= 1;
+        if (chain_length == 0) break;
+
+        const next = prev[cur_match & win_mask];
+        if (next == 0) break; // NIL
+        if (next >= cur_match) break; // chain must move backward
+        cur_match = next;
+    }
+
+    return if (best_len >= params.min_match) best_len else 0;
+}
+
+// ─── Fixed-Huffman length and distance code tables (RFC 1951 §3.2.5) ─────
+
+/// Length code lookup: length (3..258) -> (code in 257..285, num_extra_bits, extra_bits).
+/// Computed lazily in lengthCode().
+
+fn lengthCode(length: u16) struct { code: u16, extra_bits: u8, extra_val: u16 } {
+    // RFC 1951 §3.2.5: length codes 257..285.
+    // Lengths 3..10 are single codes (no extra bits): code = 257 + length - 3.
+    // Lengths 11..258 share codes with extra bits.
+    std.debug.assert(length >= 3 and length <= 258);
+    if (length <= 10) return .{ .code = @as(u16, 257) + length - 3, .extra_bits = 0, .extra_val = 0 };
+    if (length == 258) return .{ .code = 285, .extra_bits = 0, .extra_val = 0 };
+    // For 11..257, codes 265..284. Mapping table.
+    const table = [_]struct { base: u16, extra: u8, code: u16 }{
+        .{ .base = 11,  .extra = 1, .code = 265 }, // 11..12
+        .{ .base = 13,  .extra = 1, .code = 266 }, // 13..14
+        .{ .base = 15,  .extra = 1, .code = 267 },
+        .{ .base = 17,  .extra = 1, .code = 268 },
+        .{ .base = 19,  .extra = 2, .code = 269 }, // 19..22
+        .{ .base = 23,  .extra = 2, .code = 270 },
+        .{ .base = 27,  .extra = 2, .code = 271 },
+        .{ .base = 31,  .extra = 2, .code = 272 },
+        .{ .base = 35,  .extra = 3, .code = 273 },
+        .{ .base = 43,  .extra = 3, .code = 274 },
+        .{ .base = 51,  .extra = 3, .code = 275 },
+        .{ .base = 59,  .extra = 3, .code = 276 },
+        .{ .base = 67,  .extra = 4, .code = 277 },
+        .{ .base = 83,  .extra = 4, .code = 278 },
+        .{ .base = 99,  .extra = 4, .code = 279 },
+        .{ .base = 115, .extra = 4, .code = 280 },
+        .{ .base = 131, .extra = 5, .code = 281 },
+        .{ .base = 163, .extra = 5, .code = 282 },
+        .{ .base = 195, .extra = 5, .code = 283 },
+        .{ .base = 227, .extra = 5, .code = 284 }, // 227..257
+    };
+    var i: usize = table.len - 1;
+    while (true) : (i -= 1) {
+        if (length >= table[i].base) {
+            return .{ .code = table[i].code, .extra_bits = table[i].extra, .extra_val = length - table[i].base };
+        }
+        if (i == 0) unreachable;
+    }
+}
+
+fn distanceCode(distance: u16) struct { code: u8, extra_bits: u8, extra_val: u16 } {
+    std.debug.assert(distance >= 1 and distance <= 32768);
+    // RFC 1951 §3.2.5: distance codes 0..29.
+    const table = [_]struct { base: u16, extra: u8, code: u8 }{
+        .{ .base = 1,     .extra = 0,  .code = 0 },
+        .{ .base = 2,     .extra = 0,  .code = 1 },
+        .{ .base = 3,     .extra = 0,  .code = 2 },
+        .{ .base = 4,     .extra = 0,  .code = 3 },
+        .{ .base = 5,     .extra = 1,  .code = 4 },
+        .{ .base = 7,     .extra = 1,  .code = 5 },
+        .{ .base = 9,     .extra = 2,  .code = 6 },
+        .{ .base = 13,    .extra = 2,  .code = 7 },
+        .{ .base = 17,    .extra = 3,  .code = 8 },
+        .{ .base = 25,    .extra = 3,  .code = 9 },
+        .{ .base = 33,    .extra = 4,  .code = 10 },
+        .{ .base = 49,    .extra = 4,  .code = 11 },
+        .{ .base = 65,    .extra = 5,  .code = 12 },
+        .{ .base = 97,    .extra = 5,  .code = 13 },
+        .{ .base = 129,   .extra = 6,  .code = 14 },
+        .{ .base = 193,   .extra = 6,  .code = 15 },
+        .{ .base = 257,   .extra = 7,  .code = 16 },
+        .{ .base = 385,   .extra = 7,  .code = 17 },
+        .{ .base = 513,   .extra = 8,  .code = 18 },
+        .{ .base = 769,   .extra = 8,  .code = 19 },
+        .{ .base = 1025,  .extra = 9,  .code = 20 },
+        .{ .base = 1537,  .extra = 9,  .code = 21 },
+        .{ .base = 2049,  .extra = 10, .code = 22 },
+        .{ .base = 3073,  .extra = 10, .code = 23 },
+        .{ .base = 4097,  .extra = 11, .code = 24 },
+        .{ .base = 6145,  .extra = 11, .code = 25 },
+        .{ .base = 8193,  .extra = 12, .code = 26 },
+        .{ .base = 12289, .extra = 12, .code = 27 },
+        .{ .base = 16385, .extra = 13, .code = 28 },
+        .{ .base = 24577, .extra = 13, .code = 29 },
+    };
+    var i: usize = table.len - 1;
+    while (true) : (i -= 1) {
+        if (distance >= table[i].base) {
+            return .{ .code = table[i].code, .extra_bits = table[i].extra, .extra_val = distance - table[i].base };
+        }
+        if (i == 0) unreachable;
+    }
+}
+
+/// Fixed-Huffman code for length symbols 257..285.
+/// 7-bit codes for 257..279, 8-bit codes for 280..285.
+fn writeFixedLengthCode(bw: *BitWriter, code: u16) !void {
+    if (code <= 279) {
+        const value: u16 = code - 256; // 1..23
+        try bw.writeBits(reverseBits(value, 7), 7);
+    } else {
+        const value: u16 = 0xC0 + (code - 280); // 0xC0..0xC5
+        try bw.writeBits(reverseBits(value, 8), 8);
+    }
+}
+
+/// Fixed-Huffman code for distance symbols 0..29. All 5 bits.
+fn writeFixedDistanceCode(bw: *BitWriter, code: u8) !void {
+    try bw.writeBits(reverseBits(code, 5), 5);
+}
+
+/// Sum of fixed-Huffman bit costs for a token sequence (excluding the 3-bit
+/// BFINAL/BTYPE header and the EOB symbol).
+fn staticTokenBitsCost(tokens: []const Token) u32 {
+    var bits: u32 = 0;
+    for (tokens) |t| switch (t) {
+        .literal => |b| bits += if (b < 144) @as(u32, 8) else 9,
+        .match => |m| {
+            const lc = lengthCode(m.length);
+            // Length-code Huffman: 7 bits if code <= 279, else 8.
+            bits += if (lc.code <= 279) @as(u32, 7) else 8;
+            bits += lc.extra_bits;
+            // Distance-code: 5 bits fixed.
+            const dc = distanceCode(m.distance);
+            bits += 5;
+            bits += dc.extra_bits;
+        },
+    };
+    return bits;
+}
+
+/// Encode tokens as a single BFINAL=1/BTYPE=01 fixed-Huffman block.
+fn encodeFixedHuffmanFromTokens(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    // BFINAL=1, BTYPE=01 (LSB-first 3-bit value = 0b011 = 3).
+    try bw.writeBits(3, 3);
+
+    for (tokens) |t| switch (t) {
+        .literal => |b| try writeFixedLiteral(&bw, b),
+        .match => |m| {
+            const lc = lengthCode(m.length);
+            try writeFixedLengthCode(&bw, lc.code);
+            if (lc.extra_bits > 0) try bw.writeBits(lc.extra_val, @intCast(lc.extra_bits));
+            const dc = distanceCode(m.distance);
+            try writeFixedDistanceCode(&bw, dc.code);
+            if (dc.extra_bits > 0) try bw.writeBits(dc.extra_val, @intCast(dc.extra_bits));
+        },
+    };
+
+    // EOB (fixed code for symbol 256 = 7-bit 0).
+    try bw.writeBits(0, 7);
+    return bw.toOwnedSlice();
+}
+
+/// Total uncompressed byte count represented by a token sequence — needed
+/// for the stored-block cost comparison.
+fn tokenStreamRawLen(tokens: []const Token) usize {
+    var n: usize = 0;
+    for (tokens) |t| switch (t) {
+        .literal => n += 1,
+        .match => |m| n += m.length,
+    };
+    return n;
+}
+
+/// Reconstruct raw bytes from a token sequence — needed when we want to
+/// emit a STORED block as the winner of the 3-way comparison.
+fn reconstructFromTokens(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.ensureTotalCapacity(allocator, tokenStreamRawLen(tokens));
+    for (tokens) |t| switch (t) {
+        .literal => |b| try out.append(allocator, b),
+        .match => |m| {
+            // Length-distance "byte copy" — note the standard DEFLATE
+            // semantics: copy from `length` positions back, byte by byte.
+            // For distance < length (RLE-style), bytes generated by the
+            // copy are themselves visible to subsequent copies.
+            const start = out.items.len - m.distance;
+            var k: u16 = 0;
+            while (k < m.length) : (k += 1) {
+                try out.append(allocator, out.items[start + k]);
+            }
+        },
+    };
+    return out.toOwnedSlice(allocator);
+}
+
+/// Encode `tokens` as a single DEFLATE block using zlib's 3-way cost
+/// dispatch (FIXED / DYNAMIC / STORED). Mirrors Phase D but token-aware.
+pub fn encodeBlockFromTokens(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+) ![]u8 {
+    // Static cost.
+    const static_len_bits: u32 = staticTokenBitsCost(tokens) + 7; // +7 for EOB
+    const static_lenb: u32 = (static_len_bits + 3 + 7) >> 3;
+
+    // For v0.1 we don't yet have a dynamic-Huffman emitter that handles
+    // matches (the Phase B+C code is literals-only). So for now we always
+    // pick min(FIXED, STORED) — DYNAMIC would beat FIXED only when symbol
+    // frequencies make a dynamic tree worth its overhead, which is rare
+    // for the tiny inputs targeted by level=1 at small sizes.
+    //
+    // TODO when dynamic-over-tokens lands: compute opt_lenb the same way
+    // Phase D does.
+
+    const raw_len: u32 = @intCast(tokenStreamRawLen(tokens));
+    const stored_est: u32 = raw_len + 4;
+
+    if (stored_est <= static_lenb) {
+        // STORED wins. Reconstruct raw bytes from tokens and emit.
+        const raw = try reconstructFromTokens(allocator, tokens);
+        defer allocator.free(raw);
+        return try encodeZlibStored(allocator, raw);
+    }
+    return try encodeFixedHuffmanFromTokens(allocator, tokens);
+}
+
+/// zlib level=1 DEFAULT_STRATEGY: LZ77-tokenize with `LZ77_LEVEL_1` params
+/// then dispatch via the 3-way block-type cost comparison.
+pub fn encodeZlibLevel1(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokens(allocator, tokens);
+}
+
+// ─── Phase E tests ────────────────────────────────────────────────────────
+
+test "encodeZlibLevel1: no-match cases match the fixed-Huffman literal path" {
+    // 'A' — single literal, no match possible.
+    {
+        const got = try encodeZlibLevel1(testing.allocator, "A");
+        defer testing.allocator.free(got);
+        try testing.expectEqualSlices(u8, &.{ 0x73, 0x04, 0x00 }, got);
+    }
+    // 'ABC' — three literals, no repeat.
+    {
+        const got = try encodeZlibLevel1(testing.allocator, "ABC");
+        defer testing.allocator.free(got);
+        try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x72, 0x06, 0x00 }, got);
+    }
+    // 'Hello, world!' — 13 literals, no useful repeats.
+    {
+        const got = try encodeZlibLevel1(testing.allocator, "Hello, world!");
+        defer testing.allocator.free(got);
+        try testing.expectEqualSlices(
+            u8,
+            &.{ 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0xd7, 0x51, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0x51, 0x04, 0x00 },
+            got,
+        );
+    }
+}
+
+test "encodeZlibLevel1: 'AAAA' emits 4 literals (NIL=0 quirk prevents matching position 0)" {
+    const got = try encodeZlibLevel1(testing.allocator, "AAAA");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x74, 0x74, 0x04, 0x00 }, got);
+}
+
+test "encodeZlibLevel1: 'AAAAAAAA' emits 2 literals + match(6, dist=1) — RLE" {
+    const got = try encodeZlibLevel1(testing.allocator, "AAAAAAAA");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x84, 0x00, 0x00 }, got);
+}
+
+test "encodeZlibLevel1: 'ABCABCABCABC' -> 4 literals + match(8, dist=3)" {
+    const got = try encodeZlibLevel1(testing.allocator, "ABCABCABCABC");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x72, 0x76, 0x84, 0x21, 0x00 }, got);
+}
+
+test "encodeZlibLevel1: 'ABCABC' emits 6 literals (NIL=0 prevents matching the ABC at pos 0)" {
+    const got = try encodeZlibLevel1(testing.allocator, "ABCABC");
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x72, 0x76, 0x74, 0x72, 0x06, 0x00 }, got);
+}
+
+test "encodeZlibLevel1: 16x 'A' -> 2 literals + match(14, dist=1)" {
+    const input = "A" ** 16;
+    const got = try encodeZlibLevel1(testing.allocator, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x44, 0x05, 0x00 }, got);
+}

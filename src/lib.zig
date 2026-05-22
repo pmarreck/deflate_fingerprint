@@ -80,6 +80,11 @@ pub const FINGERPRINTS = [_]Fingerprint{
         .description = "zlib Z_HUFFMAN_ONLY (any level, any memLevel; 3-way FIXED/DYNAMIC/STORED dispatch)",
         .encode = encoder.encodeZlibHuffmanOnly,
     },
+    .{
+        .id = 3,
+        .description = "zlib level=1 DEFAULT_STRATEGY (deflate_fast, greedy LZ77, hash-chain depth 4)",
+        .encode = encoder.encodeZlibLevel1,
+    },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
