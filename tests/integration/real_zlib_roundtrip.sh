@@ -156,21 +156,37 @@ echo ""
 echo "test: fingerprint #3 (zlib level=1, LZ77 inter-position match)"
 assert_identifies_as "'ABCABCABCABC' L1 default" "$ABCREP" 1 default     3
 
-# ─── Byte-equivalence: L6 DEFAULT_STRATEGY of low-entropy inputs ─────────
+# ─── Fingerprints #4/#5: zlib L6/L9 DEFAULT_STRATEGY (lazy matching) ──────
 echo ""
-echo "test: byte-equivalence — L6 default of LZ77-trigger input is NOT covered yet"
-# 16×A at L6 DEFAULT should pick up matches more aggressively than L1 (max_chain=128),
-# producing bytes DIFFERENT from any current fingerprint -> should return id=0.
-"$GEN" "$A16" "$WORK/l6_a16.bin" 6 default 2>/dev/null
-json=$("$CLI" identify --json --raw "$A16" --target "$WORK/l6_a16.bin" 2>/dev/null)
-got_id=$(echo "$json" | sed -E 's/.*"fingerprint_id":([0-9]+).*/\1/')
-# Could match #3 if L6's output happens to equal L1's for this input.
-# Otherwise should be id=0. Either is reasonable for v0.1.
-if [[ "$got_id" == "0" || "$got_id" == "3" ]]; then
-	pass "L6 DEFAULT on 16×A returns id=$got_id (expected 0 or 3 for v0.1 coverage)"
-else
-	fail "L6 DEFAULT on 16×A: unexpected id=$got_id (json: $json)"
-fi
+echo "test: fingerprint #4 (zlib level=6 DEFAULT_STRATEGY, lazy LZ77)"
+# 16×A: same RLE-style match shape as L1 — byte-equivalent. Either #3, #4, or #5
+# is a valid attribution (zlib uses the same match logic for trivial RLE input).
+assert_identifies_as "16×A L6 default"          "$A16"     6 default       "3,4,5"
+# 'ABCABCABCABC' similarly converges across levels.
+assert_identifies_as "'ABCABCABCABC' L6 default" "$ABCREP" 6 default       "3,4,5"
+# "Hello, world!" — no useful matches, falls through to HUFFMAN_ONLY-equivalent.
+assert_identifies_as "'Hello' L6 default"       "$HELLO"   6 default       "2,3,4,5"
+
+echo ""
+echo "test: fingerprint #5 (zlib level=9 DEFAULT_STRATEGY)"
+assert_identifies_as "16×A L9 default"          "$A16"     9 default       "3,4,5"
+assert_identifies_as "'ABCABCABCABC' L9 default" "$ABCREP" 9 default       "3,4,5"
+assert_identifies_as "'Hello' L9 default"       "$HELLO"   9 default       "2,3,4,5"
+
+# A longer, more compressible input. For this particular phrase, L1/L6/L9
+# all produce byte-IDENTICAL output (the matches are easy enough that
+# chain-depth and lazy-matching don't change the choices). Verified
+# empirically: L1==L6==L9 == 50 bytes for this 110-char input. So any of
+# #3/#4/#5 is a valid attribution; detector returns the first registered
+# match (#3). Finding inputs where L6 and L9 actually differ from L1 is
+# a follow-up — they need pathological patterns where lazy matching or
+# chain depth changes the chosen tokens.
+echo ""
+echo "test: longish input — L1==L6==L9 byte-equivalence"
+LONG_TXT="$WORK/longish.txt"
+printf 'The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox.' > "$LONG_TXT"
+assert_identifies_as "longish L6 default"       "$LONG_TXT" 6 default      "3,4,5"
+assert_identifies_as "longish L9 default"       "$LONG_TXT" 9 default      "3,4,5"
 
 echo ""
 echo "real_zlib_roundtrip.sh: $PASS passed, $FAIL failed"

@@ -85,6 +85,16 @@ pub const FINGERPRINTS = [_]Fingerprint{
         .description = "zlib level=1 DEFAULT_STRATEGY (deflate_fast, greedy LZ77, hash-chain depth 4)",
         .encode = encoder.encodeZlibLevel1,
     },
+    .{
+        .id = 4,
+        .description = "zlib level=6 DEFAULT_STRATEGY (deflate_slow, lazy LZ77, chain depth 128, lazy threshold 16)",
+        .encode = encoder.encodeZlibLevel6,
+    },
+    .{
+        .id = 5,
+        .description = "zlib level=9 DEFAULT_STRATEGY (deflate_slow, max-effort lazy LZ77, chain depth 4096)",
+        .encode = encoder.encodeZlibLevel9,
+    },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.

@@ -1207,15 +1207,16 @@ pub fn lz77Tokenize(
 
         var match_length: u16 = 0;
         var match_distance: u16 = 0;
-        if (hash_head != 0 // NIL check — note 0 is the sentinel; position 0 is unmatchable
+        if (hash_head != 0
             and strstart > hash_head
             and (strstart - hash_head) <= params.window_size
             and lookahead >= params.min_match)
         {
-            const ml = longestMatch(raw, strstart, hash_head, prev, params, lookahead, win_mask);
-            if (ml >= params.min_match) {
-                match_length = ml;
-                match_distance = @intCast(strstart - hash_head);
+            // Greedy: `prev_length = 0` so longestMatch reports any match >= MIN_MATCH.
+            const result = longestMatch(raw, strstart, hash_head, prev, params, lookahead, win_mask, params.min_match - 1);
+            if (result.length >= params.min_match) {
+                match_length = result.length;
+                match_distance = @intCast(strstart - result.start);
             }
         }
 
@@ -1242,9 +1243,24 @@ pub fn lz77Tokenize(
     return tokens.toOwnedSlice(allocator);
 }
 
-/// Walk the hash chain starting at `cur_match`, returning the longest match
-/// length found at any chain entry. Honors `params.max_chain_length` and
-/// `params.nice_match` for early termination.
+/// Result of `longestMatch`: the longest match length found, and the
+/// position (in `raw`) where it was found. Length 0 means no match
+/// satisfying `>= prev_length + 1` was found at any chain entry.
+const MatchResult = struct {
+    length: u16,
+    start: u32,
+};
+
+/// Walk the hash chain starting at `cur_match`, returning the longest
+/// match length AND the position where it was found. Honors zlib's
+/// optimizations:
+///   - `best_len` starts at `prev_length` so we only search for strictly
+///     longer matches (matches `<= prev_length` are ignored).
+///   - Chain length is halved when `prev_length >= good_match` (the
+///     "good match" early-bail optimization).
+///   - Loop exits when a match `>= nice_match` is found.
+///
+/// Returns `{ length: 0, start: 0 }` when no strictly-longer match exists.
 fn longestMatch(
     raw: []const u8,
     strstart: usize,
@@ -1253,21 +1269,24 @@ fn longestMatch(
     params: LZ77Params,
     lookahead: usize,
     win_mask: usize,
-) u16 {
-    var chain_length = params.max_chain_length;
-    var best_len: u16 = params.min_match - 1;
+    prev_length: u16,
+) MatchResult {
+    var chain_length: u32 = params.max_chain_length;
+    if (prev_length >= params.good_match) chain_length >>= 2;
+
+    var best_len: u16 = prev_length;
+    var best_start: u32 = 0;
     const max_len: u16 = @intCast(@min(@as(usize, params.max_match), lookahead));
     var cur_match: usize = cur_match_in;
 
     while (true) {
-        // Don't try to match if cur_match is at or past strstart (forward refs invalid).
         if (cur_match >= strstart) break;
 
-        // Count matching bytes from raw[strstart] vs raw[cur_match].
         var n: u16 = 0;
         while (n < max_len and raw[strstart + n] == raw[cur_match + n]) : (n += 1) {}
         if (n > best_len) {
             best_len = n;
+            best_start = @intCast(cur_match);
             if (n >= params.nice_match) break;
         }
 
@@ -1275,12 +1294,15 @@ fn longestMatch(
         if (chain_length == 0) break;
 
         const next = prev[cur_match & win_mask];
-        if (next == 0) break; // NIL
-        if (next >= cur_match) break; // chain must move backward
+        if (next == 0) break;
+        if (next >= cur_match) break;
         cur_match = next;
     }
 
-    return if (best_len >= params.min_match) best_len else 0;
+    if (best_len > prev_length) {
+        return .{ .length = best_len, .start = best_start };
+    }
+    return .{ .length = 0, .start = 0 };
 }
 
 // ─── Fixed-Huffman length and distance code tables (RFC 1951 §3.2.5) ─────
@@ -1562,4 +1584,330 @@ test "encodeZlibLevel1: 16x 'A' -> 2 literals + match(14, dist=1)" {
     const got = try encodeZlibLevel1(testing.allocator, input);
     defer testing.allocator.free(got);
     try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x44, 0x05, 0x00 }, got);
+}
+
+// ─── Phase F: dynamic Huffman over tokens + lazy matching + levels 6/9 ──
+//
+// Generalizes the literals-only Phase B/C dynamic emitter to handle Token
+// streams (lit+length tree + distance tree). Adds lazy matching (zlib's
+// `deflate_slow`) and registers levels 6 and 9 as fingerprints #4 and #5.
+
+/// Encode tokens as a single BFINAL=1/BTYPE=10 dynamic Huffman block.
+/// Generalizes `encodeDynamicHuffmanLiterals` to handle length/distance
+/// codes in addition to literal codes.
+fn encodeDynamicHuffmanFromTokens(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    // 1. Frequencies.
+    var lit_freq = [_]u16{0} ** 286;
+    var dist_freq = [_]u16{0} ** 30;
+    for (tokens) |t| switch (t) {
+        .literal => |b| lit_freq[b] += 1,
+        .match => |m| {
+            const lc = lengthCode(m.length);
+            lit_freq[lc.code] += 1;
+            const dc = distanceCode(m.distance);
+            dist_freq[dc.code] += 1;
+        },
+    };
+    lit_freq[256] = 1; // EOB
+
+    // 2. Build literal/length tree.
+    var lit_lens = [_]u8{0} ** 286;
+    try buildHuffmanLengths(allocator, &lit_freq, 15, &lit_lens);
+    // 3. Build distance tree. If no matches, Phase A's at-least-2-leaves
+    //    rule synthesizes two length-1 dummies at distance symbols 0 and 1.
+    var dist_lens = [_]u8{0} ** 30;
+    try buildHuffmanLengths(allocator, &dist_freq, 15, &dist_lens);
+
+    // 4. Determine HLIT/HDIST.
+    var max_lit: usize = 256;
+    var i: usize = 285;
+    while (i > 256) : (i -= 1) {
+        if (lit_lens[i] != 0) { max_lit = i; break; }
+    }
+    var max_dist: usize = 0;
+    var j: usize = 29;
+    while (j > 0) : (j -= 1) {
+        if (dist_lens[j] != 0) { max_dist = j; break; }
+    }
+    const hlit_count: usize = max_lit + 1;
+    const hdist_count: usize = max_dist + 1;
+
+    // 5. scan_tree -> bl_freq.
+    var bl_freq = [_]u16{0} ** 19;
+    scanCodeLengths(&lit_lens, hlit_count, &bl_freq);
+    scanCodeLengths(&dist_lens, hdist_count, &bl_freq);
+
+    // 6. CL Huffman tree (max length 7).
+    var bl_lens = [_]u8{0} ** 19;
+    try buildHuffmanLengths(allocator, &bl_freq, 7, &bl_lens);
+
+    // 7. HCLEN trimming.
+    var hclen_count: usize = 4;
+    var k: usize = 19;
+    while (k > 4) : (k -= 1) {
+        if (bl_lens[BL_ORDER[k - 1]] != 0) {
+            hclen_count = k;
+            break;
+        }
+    }
+
+    // 8. Canonical codes.
+    var bl_codes: [19]u32 = undefined;
+    computeCanonicalCodes(&bl_lens, &bl_codes);
+    var lit_codes: [286]u32 = undefined;
+    computeCanonicalCodes(&lit_lens, &lit_codes);
+    var dist_codes: [30]u32 = undefined;
+    computeCanonicalCodes(&dist_lens, &dist_codes);
+
+    // 9. Emit block.
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    // BFINAL=1, BTYPE=10 (LSB-first 0b101 = 5).
+    try bw.writeBits(5, 3);
+    try bw.writeBits(@intCast(hlit_count - 257), 5);
+    try bw.writeBits(@intCast(hdist_count - 1), 5);
+    try bw.writeBits(@intCast(hclen_count - 4), 4);
+
+    var b: usize = 0;
+    while (b < hclen_count) : (b += 1) {
+        try bw.writeBits(bl_lens[BL_ORDER[b]], 3);
+    }
+
+    try sendCodeLengths(&bw, &lit_lens, hlit_count, &bl_codes, &bl_lens);
+    try sendCodeLengths(&bw, &dist_lens, hdist_count, &bl_codes, &bl_lens);
+
+    // Emit each token through the dynamic trees.
+    for (tokens) |t| switch (t) {
+        .literal => |byte| {
+            const code = lit_codes[byte];
+            const nbits: u6 = @intCast(lit_lens[byte]);
+            std.debug.assert(nbits != 0);
+            try bw.writeBits(reverseBits(@intCast(code), nbits), nbits);
+        },
+        .match => |m| {
+            const lc = lengthCode(m.length);
+            const lcode = lit_codes[lc.code];
+            const lnbits: u6 = @intCast(lit_lens[lc.code]);
+            std.debug.assert(lnbits != 0);
+            try bw.writeBits(reverseBits(@intCast(lcode), lnbits), lnbits);
+            if (lc.extra_bits > 0) try bw.writeBits(lc.extra_val, @intCast(lc.extra_bits));
+
+            const dc = distanceCode(m.distance);
+            const dcode = dist_codes[dc.code];
+            const dnbits: u6 = @intCast(dist_lens[dc.code]);
+            std.debug.assert(dnbits != 0);
+            try bw.writeBits(reverseBits(@intCast(dcode), dnbits), dnbits);
+            if (dc.extra_bits > 0) try bw.writeBits(dc.extra_val, @intCast(dc.extra_bits));
+        },
+    };
+
+    // EOB.
+    const eob_code = lit_codes[256];
+    const eob_nbits: u6 = @intCast(lit_lens[256]);
+    std.debug.assert(eob_nbits != 0);
+    try bw.writeBits(reverseBits(@intCast(eob_code), eob_nbits), eob_nbits);
+
+    return bw.toOwnedSlice();
+}
+
+/// Replacement for the literals-only `encodeBlockFromTokens` that includes
+/// the DYNAMIC branch — full zlib 3-way dispatch over Token streams.
+pub fn encodeBlockFromTokensWithDynamic(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+) ![]u8 {
+    const static_len_bits: u32 = staticTokenBitsCost(tokens) + 7;
+    const static_lenb: u32 = (static_len_bits + 3 + 7) >> 3;
+
+    // Build the dynamic candidate; its byte length is zlib's opt_lenb.
+    const dynamic = try encodeDynamicHuffmanFromTokens(allocator, tokens);
+    errdefer allocator.free(dynamic);
+    var opt_lenb: u32 = @intCast(dynamic.len);
+
+    if (static_lenb <= opt_lenb) opt_lenb = static_lenb;
+
+    const raw_len: u32 = @intCast(tokenStreamRawLen(tokens));
+    const stored_est: u32 = raw_len + 4;
+
+    if (stored_est <= opt_lenb) {
+        allocator.free(dynamic);
+        const raw = try reconstructFromTokens(allocator, tokens);
+        defer allocator.free(raw);
+        return try encodeZlibStored(allocator, raw);
+    }
+    if (static_lenb == opt_lenb) {
+        allocator.free(dynamic);
+        return try encodeFixedHuffmanFromTokens(allocator, tokens);
+    }
+    return dynamic;
+}
+
+/// zlib's `configuration_table[6]`: deflate_slow, lazy matching.
+pub const LZ77_LEVEL_6: LZ77Params = .{
+    .max_chain_length = 128,
+    .good_match = 8,
+    .nice_match = 128,
+    .max_lazy_match = 16,
+};
+
+/// zlib's `configuration_table[9]`: maximum-effort lazy matching.
+pub const LZ77_LEVEL_9: LZ77Params = .{
+    .max_chain_length = 4096,
+    .good_match = 32,
+    .nice_match = 258,
+    .max_lazy_match = 258,
+};
+
+/// LZ77 with lazy matching, matching zlib's `deflate_slow` for levels 4-9.
+/// The algorithm defers each match by one position to check whether the
+/// next position offers a longer match. If so, the current position is
+/// emitted as a literal and we accept the longer match; otherwise the
+/// deferred match is accepted.
+pub fn lz77TokenizeSlow(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+) ![]Token {
+    var tokens: std.ArrayList(Token) = .empty;
+    errdefer tokens.deinit(allocator);
+    if (raw.len == 0) return tokens.toOwnedSlice(allocator);
+
+    const hash_size: usize = @as(usize, 1) << params.hash_bits;
+    const hash_mask: u32 = @intCast(hash_size - 1);
+    const win_mask: usize = params.window_size - 1;
+
+    var head = try allocator.alloc(u32, hash_size);
+    defer allocator.free(head);
+    @memset(head, 0);
+    var prev = try allocator.alloc(u32, params.window_size);
+    defer allocator.free(prev);
+    @memset(prev, 0);
+
+    var strstart: usize = 0;
+    var lookahead: usize = raw.len;
+    var ins_h: u32 = 0;
+
+    if (lookahead >= 2) {
+        ins_h = ((@as(u32, raw[0]) << params.hash_shift) ^ @as(u32, raw[1])) & hash_mask;
+    } else if (lookahead == 1) {
+        ins_h = raw[0];
+    }
+
+    // Lazy-match state.
+    var prev_length: u16 = params.min_match - 1; // 2
+    var prev_match: u32 = 0;
+    var match_length: u16 = params.min_match - 1;
+    var match_start: u32 = 0;
+    var match_available: bool = false;
+
+    while (lookahead > 0) {
+        // 1. Hash + INSERT_STRING at current strstart.
+        var hash_head: u32 = 0;
+        if (lookahead >= params.min_match) {
+            ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[strstart + params.min_match - 1])) & hash_mask;
+            hash_head = head[ins_h];
+            prev[strstart & win_mask] = hash_head;
+            head[ins_h] = @intCast(strstart);
+        }
+
+        // 2. Save previous match info; reset current.
+        prev_length = match_length;
+        prev_match = match_start;
+        match_length = params.min_match - 1;
+
+        // 3. Try a new (current-position) match if conditions allow.
+        //    longestMatch reports only strictly-longer matches (initialized
+        //    to prev_length), so we only update match_length/start when a
+        //    *strictly* longer match is found at the current position. If
+        //    no longer match exists, prev_match/prev_length will be emitted
+        //    as the accepted match in the decision tree below.
+        if (hash_head != 0
+            and prev_length < params.max_lazy_match
+            and strstart > hash_head
+            and (strstart - hash_head) <= params.window_size
+            and lookahead >= params.min_match)
+        {
+            const result = longestMatch(raw, strstart, hash_head, prev, params, lookahead, win_mask, prev_length);
+            if (result.length >= params.min_match and result.length > prev_length) {
+                match_length = result.length;
+                match_start = result.start;
+            }
+        }
+
+        // 4. Decision tree.
+        if (prev_length >= params.min_match and match_length <= prev_length) {
+            // Accept the previous match (it started at strstart-1).
+            // Distance = (strstart - 1) - prev_match.
+            const dist: u16 = @intCast((strstart - 1) - prev_match);
+            try tokens.append(allocator, .{ .match = .{ .length = prev_length, .distance = dist } });
+
+            // Insert all positions within the match into the hash chain.
+            // max_insert = strstart + lookahead - MIN_MATCH (the last
+            // position whose 3-byte prefix is still in-window).
+            const max_insert: usize = strstart + lookahead - params.min_match;
+            lookahead -= prev_length - 1;
+            var remaining: u16 = prev_length - 2;
+            while (remaining != 0) : (remaining -= 1) {
+                strstart += 1;
+                if (strstart <= max_insert) {
+                    ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[strstart + params.min_match - 1])) & hash_mask;
+                    const ph = head[ins_h];
+                    prev[strstart & win_mask] = ph;
+                    head[ins_h] = @intCast(strstart);
+                }
+            }
+            match_available = false;
+            match_length = params.min_match - 1;
+            strstart += 1;
+        } else if (match_available) {
+            // No new match (or shorter than prev). Emit the deferred literal.
+            try tokens.append(allocator, .{ .literal = raw[strstart - 1] });
+            strstart += 1;
+            lookahead -= 1;
+        } else {
+            // No deferred byte yet. Set the flag for next iteration.
+            match_available = true;
+            strstart += 1;
+            lookahead -= 1;
+        }
+    }
+
+    // Flush remaining lazy literal at end of input.
+    if (match_available) {
+        try tokens.append(allocator, .{ .literal = raw[strstart - 1] });
+    }
+
+    return tokens.toOwnedSlice(allocator);
+}
+
+/// zlib level=6 DEFAULT_STRATEGY: lazy LZ77 (chain depth 128, lazy threshold 16)
+/// + 3-way Huffman dispatch. The most-common zlib config in real-world archives.
+pub fn encodeZlibLevel6(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+/// zlib level=9: deepest chain (4096), lazy threshold 258 (always lazy).
+pub fn encodeZlibLevel9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_9);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+// ─── Phase F debug tests ──────────────────────────────────────────────────
+
+test "encodeZlibLevel6: 'longish' input matches zlib L6 byte-exact (DIAGNOSTIC)" {
+    const input = "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox.";
+    const got = try encodeZlibLevel6(testing.allocator, input);
+    defer testing.allocator.free(got);
+    // Ground truth captured from real zlib 1.3.2 level=6, raw DEFLATE.
+    const expected = [_]u8{
+        0x0b, 0xc9, 0x48, 0x55, 0x28, 0x2c, 0xcd, 0x4c, 0xce, 0x56, 0x48, 0x2a, 0xca, 0x2f, 0xcf, 0x53,
+        0x48, 0xcb, 0xaf, 0x50, 0xc8, 0x2a, 0xcd, 0x2d, 0x28, 0x56, 0xc8, 0x2f, 0x4b, 0x2d, 0x52, 0x28,
+        0x01, 0x4a, 0xe7, 0x24, 0x56, 0x55, 0x2a, 0xa4, 0xe4, 0xa7, 0xeb, 0x29, 0x84, 0x50, 0xa8, 0x58,
+        0x0f, 0x00,
+    };
+    try testing.expectEqualSlices(u8, &expected, got);
 }
