@@ -343,22 +343,33 @@ pub fn encodeDynamicHuffmanFromTokens(allocator: std.mem.Allocator, tokens: []co
 /// only the static cost (zlib uses min(static, dyn) but for the small
 /// inputs where Z_FIXED matters the two usually agree).
 pub fn encodeBlockFromTokens(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+    try emitBlockFromTokensInto(&bw, allocator, tokens, 1);
+    return bw.toOwnedSlice();
+}
+
+/// 2-way (STORED / FIXED) dispatch over a Token stream, emitted into `bw`
+/// with the given BFINAL bit. Used by Z_FIXED multi-block drivers.
+pub fn emitBlockFromTokensInto(
+    bw: *BitWriter,
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    bfinal: u1,
+) !void {
     const static_len_bits: u32 = staticTokenBitsCost(tokens) + 7;
     const static_lenb: u32 = (static_len_bits + 3 + 7) >> 3;
     const raw_len: u32 = @intCast(tokenStreamRawLen(tokens));
     const stored_est: u32 = raw_len + 4;
 
     if (stored_est <= static_lenb) {
-        // STORED wins. Reconstruct raw bytes from tokens and emit one stored block.
         const raw = try reconstructFromTokens(allocator, tokens);
         defer allocator.free(raw);
         std.debug.assert(raw.len <= 0xFFFF);
-        var bw = BitWriter.init(allocator);
-        errdefer bw.deinit();
-        try emitStoredBlock(&bw, raw, 1);
-        return bw.toOwnedSlice();
+        try emitStoredBlock(bw, raw, bfinal);
+        return;
     }
-    return try encodeFixedHuffmanFromTokens(allocator, tokens);
+    try emitFixedHuffmanFromTokensBlock(bw, tokens, bfinal);
 }
 
 /// Full zlib 3-way (STORED / FIXED / DYNAMIC) dispatch over a Token stream,
@@ -406,4 +417,57 @@ pub fn emitBlockFromTokensWithDynamicInto(
     }
     // DYNAMIC wins — re-emit (second tree build is cheap).
     try emitDynamicHuffmanFromTokensBlock(bw, allocator, tokens, bfinal);
+}
+
+// ─── Multi-block drivers ─────────────────────────────────────────────────
+//
+// zlib flushes a block when its symbol buffer fills, i.e. every
+// (lit_bufsize-1) = 16383 symbols at memLevel=8. Each chunk picks its own
+// block type via the same cost dispatch as a single-block stream.
+// Only the final block has BFINAL=1; intermediate blocks share the
+// BitWriter so bits flow continuously.
+
+/// Symbol-count boundary for multi-block flushes at zlib's default memLevel=8.
+pub const MULTI_BLOCK_CHUNK_SYMBOLS: usize = 16383;
+
+/// Multi-block driver using the 3-way (STORED/FIXED/DYNAMIC) per-chunk
+/// dispatch. Used by default-strategy / Z_RLE / Z_FILTERED encoders.
+pub fn encodeMultiBlock3Way(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    if (tokens.len == 0) {
+        try emitFixedHuffmanFromTokensBlock(&bw, tokens, 1);
+        return bw.toOwnedSlice();
+    }
+
+    var i: usize = 0;
+    while (i < tokens.len) {
+        const end = @min(i + MULTI_BLOCK_CHUNK_SYMBOLS, tokens.len);
+        const is_last: u1 = if (end == tokens.len) 1 else 0;
+        try emitBlockFromTokensWithDynamicInto(&bw, allocator, tokens[i..end], is_last);
+        i = end;
+    }
+    return bw.toOwnedSlice();
+}
+
+/// Multi-block driver using the 2-way (STORED/FIXED) per-chunk dispatch.
+/// Used by Z_FIXED-strategy encoders.
+pub fn encodeMultiBlock2Way(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    if (tokens.len == 0) {
+        try emitFixedHuffmanFromTokensBlock(&bw, tokens, 1);
+        return bw.toOwnedSlice();
+    }
+
+    var i: usize = 0;
+    while (i < tokens.len) {
+        const end = @min(i + MULTI_BLOCK_CHUNK_SYMBOLS, tokens.len);
+        const is_last: u1 = if (end == tokens.len) 1 else 0;
+        try emitBlockFromTokensInto(&bw, allocator, tokens[i..end], is_last);
+        i = end;
+    }
+    return bw.toOwnedSlice();
 }
