@@ -1743,21 +1743,18 @@ pub fn encodeBlockFromTokensWithDynamic(
     return dynamic;
 }
 
-/// zlib's `configuration_table[6]`: deflate_slow, lazy matching.
-pub const LZ77_LEVEL_6: LZ77Params = .{
-    .max_chain_length = 128,
-    .good_match = 8,
-    .nice_match = 128,
-    .max_lazy_match = 16,
-};
+// zlib's configuration_table per level (deflate.c). Greedy `deflate_fast`
+// for levels 1-3; lazy `deflate_slow` for 4-9. Level 0 (no compression)
+// is handled by encodeZlibStored, not LZ77.
 
-/// zlib's `configuration_table[9]`: maximum-effort lazy matching.
-pub const LZ77_LEVEL_9: LZ77Params = .{
-    .max_chain_length = 4096,
-    .good_match = 32,
-    .nice_match = 258,
-    .max_lazy_match = 258,
-};
+pub const LZ77_LEVEL_2: LZ77Params = .{ .max_chain_length = 8,    .good_match = 4,  .nice_match = 16,  .max_lazy_match = 0 };
+pub const LZ77_LEVEL_3: LZ77Params = .{ .max_chain_length = 32,   .good_match = 4,  .nice_match = 32,  .max_lazy_match = 0 };
+pub const LZ77_LEVEL_4: LZ77Params = .{ .max_chain_length = 16,   .good_match = 4,  .nice_match = 16,  .max_lazy_match = 4 };
+pub const LZ77_LEVEL_5: LZ77Params = .{ .max_chain_length = 32,   .good_match = 8,  .nice_match = 32,  .max_lazy_match = 16 };
+pub const LZ77_LEVEL_6: LZ77Params = .{ .max_chain_length = 128,  .good_match = 8,  .nice_match = 128, .max_lazy_match = 16 };
+pub const LZ77_LEVEL_7: LZ77Params = .{ .max_chain_length = 256,  .good_match = 8,  .nice_match = 128, .max_lazy_match = 32 };
+pub const LZ77_LEVEL_8: LZ77Params = .{ .max_chain_length = 1024, .good_match = 32, .nice_match = 258, .max_lazy_match = 128 };
+pub const LZ77_LEVEL_9: LZ77Params = .{ .max_chain_length = 4096, .good_match = 32, .nice_match = 258, .max_lazy_match = 258 };
 
 /// LZ77 with lazy matching, matching zlib's `deflate_slow` for levels 4-9.
 /// The algorithm defers each match by one position to check whether the
@@ -1881,10 +1878,50 @@ pub fn lz77TokenizeSlow(
     return tokens.toOwnedSlice(allocator);
 }
 
+// Level wrappers — each picks the appropriate LZ77 tokenizer (greedy
+// `deflate_fast` for L1-3, lazy `deflate_slow` for L4-9) and runs the
+// resulting tokens through the 3-way Huffman block-type dispatch.
+
+pub fn encodeZlibLevel2(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_2);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel3(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_3);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel4(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_4);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel5(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_5);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
 /// zlib level=6 DEFAULT_STRATEGY: lazy LZ77 (chain depth 128, lazy threshold 16)
 /// + 3-way Huffman dispatch. The most-common zlib config in real-world archives.
 pub fn encodeZlibLevel6(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_7);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel8(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_8);
     defer allocator.free(tokens);
     return encodeBlockFromTokensWithDynamic(allocator, tokens);
 }

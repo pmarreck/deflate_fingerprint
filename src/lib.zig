@@ -95,6 +95,18 @@ pub const FINGERPRINTS = [_]Fingerprint{
         .description = "zlib level=9 DEFAULT_STRATEGY (deflate_slow, max-effort lazy LZ77, chain depth 4096)",
         .encode = encoder.encodeZlibLevel9,
     },
+    // Levels 2-5 and 7-8 — appended in registration order (IDs are stable
+    // forever per DESIGN.md). Most produce byte-equivalent output to L1
+    // (greedy) or L6/L9 (lazy) for typical inputs; they're here to cover
+    // the configs that DO produce distinct bytes for specific input
+    // patterns (e.g. inputs where chain depth or lazy threshold flips the
+    // chosen match).
+    .{ .id = 6,  .description = "zlib level=2 DEFAULT_STRATEGY (deflate_fast, chain 8)",     .encode = encoder.encodeZlibLevel2 },
+    .{ .id = 7,  .description = "zlib level=3 DEFAULT_STRATEGY (deflate_fast, chain 32)",    .encode = encoder.encodeZlibLevel3 },
+    .{ .id = 8,  .description = "zlib level=4 DEFAULT_STRATEGY (deflate_slow, lazy 4)",      .encode = encoder.encodeZlibLevel4 },
+    .{ .id = 9,  .description = "zlib level=5 DEFAULT_STRATEGY (deflate_slow, lazy 16)",     .encode = encoder.encodeZlibLevel5 },
+    .{ .id = 10, .description = "zlib level=7 DEFAULT_STRATEGY (deflate_slow, lazy 32)",     .encode = encoder.encodeZlibLevel7 },
+    .{ .id = 11, .description = "zlib level=8 DEFAULT_STRATEGY (deflate_slow, lazy 128)",    .encode = encoder.encodeZlibLevel8 },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
