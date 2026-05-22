@@ -1147,6 +1147,10 @@ pub const LZ77Params = struct {
     hash_shift: u5 = 5,
     /// Power-of-two LZ77 sliding-window size. zlib default = 32768.
     window_size: usize = 32768,
+    /// Z_FILTERED strategy: in deflate_slow, reject matches with length <= 5
+    /// (treating them as if no match were found). Has no effect on deflate_fast
+    /// since deflate_fast doesn't check strategy in the match-acceptance path.
+    filtered: bool = false,
 };
 
 /// zlib's `configuration_table[1]`: deflate_fast, greedy, hash-chain depth 4.
@@ -1799,6 +1803,15 @@ pub const LZ77_LEVEL_7: LZ77Params = .{ .max_chain_length = 256,  .good_match = 
 pub const LZ77_LEVEL_8: LZ77Params = .{ .max_chain_length = 1024, .good_match = 32, .nice_match = 258, .max_lazy_match = 128 };
 pub const LZ77_LEVEL_9: LZ77Params = .{ .max_chain_length = 4096, .good_match = 32, .nice_match = 258, .max_lazy_match = 258 };
 
+// Z_FILTERED variants: same params as the base level but with `filtered=true`.
+// Only L4-L9 differ from default (deflate_fast at L1-L3 ignores strategy in
+// the match-acceptance path).
+pub const LZ77_LEVEL_4_FILTERED: LZ77Params = .{ .max_chain_length = 16,   .good_match = 4,  .nice_match = 16,  .max_lazy_match = 4,   .filtered = true };
+pub const LZ77_LEVEL_5_FILTERED: LZ77Params = .{ .max_chain_length = 32,   .good_match = 8,  .nice_match = 32,  .max_lazy_match = 16,  .filtered = true };
+pub const LZ77_LEVEL_6_FILTERED: LZ77Params = .{ .max_chain_length = 128,  .good_match = 8,  .nice_match = 128, .max_lazy_match = 16,  .filtered = true };
+pub const LZ77_LEVEL_7_FILTERED: LZ77Params = .{ .max_chain_length = 256,  .good_match = 8,  .nice_match = 128, .max_lazy_match = 32,  .filtered = true };
+pub const LZ77_LEVEL_8_FILTERED: LZ77Params = .{ .max_chain_length = 1024, .good_match = 32, .nice_match = 258, .max_lazy_match = 128, .filtered = true };
+pub const LZ77_LEVEL_9_FILTERED: LZ77Params = .{ .max_chain_length = 4096, .good_match = 32, .nice_match = 258, .max_lazy_match = 258, .filtered = true };
 /// LZ77 with lazy matching, matching zlib's `deflate_slow` for levels 4-9.
 /// The algorithm defers each match by one position to check whether the
 /// next position offers a longer match. If so, the current position is
@@ -1872,6 +1885,12 @@ pub fn lz77TokenizeSlow(
             if (result.length >= params.min_match and result.length > prev_length) {
                 match_length = result.length;
                 match_start = result.start;
+            }
+            // Z_FILTERED rejects matches of length <= 5 (reset to no-match
+            // sentinel). zlib does this *after* longest_match returns, with
+            // the same effect as never having found one.
+            if (params.filtered and match_length >= params.min_match and match_length <= 5) {
+                match_length = params.min_match - 1;
             }
         }
 
@@ -1975,6 +1994,45 @@ pub fn encodeZlibLevel9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     defer allocator.free(tokens);
     return encodeBlockFromTokensWithDynamic(allocator, tokens);
 }
+
+// ─── Z_FILTERED strategy: reject matches with length <= 5 (deflate_slow). ──
+
+pub fn encodeZlibLevel4Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_4_FILTERED);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel5Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_5_FILTERED);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel6Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6_FILTERED);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel7Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_7_FILTERED);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel8Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_8_FILTERED);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
+pub fn encodeZlibLevel9Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_9_FILTERED);
+    defer allocator.free(tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
+}
+
 
 // ─── Z_RLE strategy: matches limited to distance=1 (run-length only) ──────
 //
@@ -2154,6 +2212,29 @@ test "encodeZlibRLE: 80B prose matches zlib Z_RLE byte-exact" {
         0x49, 0x60, 0x8a, 0xf4, 0x03,
     };
     const got = try encodeZlibRLE(testing.allocator, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &expected, got);
+}
+
+test "encodeZlibLevel4Filtered: 100B prose matches zlib Z_FILTERED byte-exact" {
+    // zlib Z_FILTERED in deflate_slow (L4-L9) rejects matches with
+    // length <= 5. L1-L3 + Z_FILTERED collapse to default since deflate_fast
+    // has no FILTERED-specific logic. Captured via:
+    //   head -c 100 README.md | gen_zlib_target ... 4 filtered
+    const input =
+        "# deflate_fingerprint\n\nIdentify which DEFLATE encoder implementation produced a given compressed byt";
+    const expected = [_]u8{
+        0x05, 0xc1, 0x41, 0x0a, 0x83, 0x30, 0x10, 0x05, 0xd0, 0xbd, 0xa7, 0xf8,
+        0xd0, 0x93, 0x14, 0x6a, 0x41, 0x70, 0xd9, 0x7d, 0x89, 0x99, 0x1f, 0x1d,
+        0x30, 0x93, 0x30, 0x8e, 0x2d, 0xde, 0xde, 0xf7, 0x1e, 0x10, 0x96, 0x3d,
+        0x05, 0xbf, 0x45, 0x6d, 0xa5, 0x77, 0x57, 0x8b, 0x61, 0x98, 0x84, 0x16,
+        0x5a, 0x2e, 0xfc, 0x37, 0xcd, 0x1b, 0x5e, 0xe3, 0x7b, 0x7e, 0x7e, 0x46,
+        0xd0, 0x72, 0x13, 0x3a, 0xb4, 0xf6, 0x9d, 0x95, 0x16, 0x29, 0xb4, 0x19,
+        0xba, 0x37, 0x39, 0x33, 0x05, 0x09, 0xab, 0xfe, 0x68, 0xc8, 0xad, 0x76,
+        0xe7, 0x71, 0x50, 0xb0, 0x5c, 0x71, 0x03,
+    };
+    try testing.expectEqual(@as(usize, 100), input.len);
+    const got = try encodeZlibLevel4Filtered(testing.allocator, input);
     defer testing.allocator.free(got);
     try testing.expectEqualSlices(u8, &expected, got);
 }

@@ -125,6 +125,16 @@ pub const FINGERPRINTS = [_]Fingerprint{
     // Levels 1-9 collapse to identical output (chain/lazy params irrelevant).
     // L0 + Z_RLE emits STORED (covered by fingerprint #1).
     .{ .id = 21, .description = "zlib Z_RLE (any level 1-9; distance-1 matches only, 3-way Huffman)", .encode = encoder.encodeZlibRLE },
+
+    // ─── Z_FILTERED strategy: deflate_slow rejects matches with length <= 5. ──
+    // L1-L3 + Z_FILTERED collapse to L1-L3 default (deflate_fast ignores
+    // strategy in match acceptance). L0 + Z_FILTERED -> STORED via #1.
+    .{ .id = 22, .description = "zlib level=4 Z_FILTERED (lazy LZ77, reject len<=5)",                .encode = encoder.encodeZlibLevel4Filtered },
+    .{ .id = 23, .description = "zlib level=5 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel5Filtered },
+    .{ .id = 24, .description = "zlib level=6 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel6Filtered },
+    .{ .id = 25, .description = "zlib level=7 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel7Filtered },
+    .{ .id = 26, .description = "zlib level=8 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel8Filtered },
+    .{ .id = 27, .description = "zlib level=9 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel9Filtered },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
