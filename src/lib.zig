@@ -18,6 +18,10 @@ const std = @import("std");
 // blocks reachable from the root file, so we explicitly ref them in a `test`
 // block below.
 pub const encoder = @import("encoder.zig");
+pub const bitstream = @import("bitstream.zig");
+pub const huffman = @import("huffman.zig");
+pub const match = @import("match.zig");
+pub const blocks = @import("blocks.zig");
 // const identify_mod = @import("identify.zig");  // TODO when written
 // const registry = @import("registry.zig");      // TODO when written
 
@@ -25,6 +29,10 @@ test {
     // Pull tests from sibling modules into the `zig build test` run.
     std.testing.refAllDecls(@This());
     _ = encoder;
+    _ = bitstream;
+    _ = huffman;
+    _ = match;
+    _ = blocks;
 }
 
 // ─── Public Zig API ──────────────────────────────────────────────────────
