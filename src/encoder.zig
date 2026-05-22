@@ -1544,7 +1544,7 @@ pub fn encodeBlockFromTokens(
 pub fn encodeZlibLevel1(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
     defer allocator.free(tokens);
-    return encodeBlockFromTokens(allocator, tokens);
+    return encodeBlockFromTokensWithDynamic(allocator, tokens);
 }
 
 // ─── Phase E tests ────────────────────────────────────────────────────────
@@ -1603,6 +1603,30 @@ test "encodeZlibLevel1: 16x 'A' -> 2 literals + match(14, dist=1)" {
     const got = try encodeZlibLevel1(testing.allocator, input);
     defer testing.allocator.free(got);
     try testing.expectEqualSlices(u8, &.{ 0x73, 0x74, 0x44, 0x05, 0x00 }, got);
+}
+
+test "encodeZlibLevel1: prose input picks DYNAMIC Huffman like real zlib" {
+    // First 80 bytes of README.md. At this size, zlib's deflate_fast cost
+    // model picks DYNAMIC (BTYPE=10) over FIXED (BTYPE=01) because the
+    // skewed literal frequency distribution makes a custom Huffman tree
+    // cheaper than the static one, despite the tree-of-trees overhead.
+    //
+    // Captured via: head -c 80 README.md | gen_zlib_target ... 1 default
+    const input =
+        "# deflate_fingerprint\n\nIdentify which DEFLATE encoder implementation produced a ";
+    const expected = [_]u8{
+        0x0d, 0xca, 0x41, 0x0a, 0x80, 0x20, 0x10, 0x05, 0xd0, 0xbd, 0xa7, 0x18,
+        0xe8, 0x24, 0x41, 0x06, 0x41, 0xcb, 0xf6, 0x21, 0xce, 0x37, 0x07, 0x74,
+        0x14, 0x99, 0x88, 0x6e, 0x5f, 0x6f, 0xfd, 0x26, 0x62, 0xa4, 0x12, 0x0c,
+        0x67, 0x12, 0xbd, 0x30, 0xfa, 0x10, 0x35, 0xe7, 0x36, 0x86, 0x9a, 0xa4,
+        0x97, 0x9e, 0x2c, 0x31, 0xd3, 0xe2, 0xd7, 0x7d, 0x3e, 0x3c, 0x41, 0x63,
+        0x63, 0x0c, 0x92, 0xda, 0x0b, 0xea, 0x5f, 0x82, 0x49, 0x53, 0xea, 0xa3,
+        0xf1, 0x1d, 0xc1, 0x14, 0xe8, 0x03,
+    };
+    try testing.expectEqual(@as(usize, 80), input.len);
+    const got = try encodeZlibLevel1(testing.allocator, input);
+    defer testing.allocator.free(got);
+    try testing.expectEqualSlices(u8, &expected, got);
 }
 
 // ─── Phase F: dynamic Huffman over tokens + lazy matching + levels 6/9 ──
