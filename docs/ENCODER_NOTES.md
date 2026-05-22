@@ -303,3 +303,80 @@ encoder is ~30 lines; the corresponding fingerprint registry entry covers
 `zlib level=0` across all (strategy, memLevel, windowBits magnitude)
 combinations. First fingerprint to land in v0.1.
 
+### zlib — HUFFMAN_ONLY emitting DYNAMIC blocks: tiny-input structure
+**Date:** 2026-05-22
+**Probe:** `bench/probes/zlib_huffman_only_dynamic.c`
+**Reference version:** zlib 1.3.2
+
+Three inputs with exactly **1 distinct literal symbol** (`'A'×14`, `NUL×12`,
+`0xFF×11`) share an **identical 8-byte common prefix** in their DYNAMIC
+output: `05 c1 81 00 00 00 00 00`. They differ only in the literal value and
+the trailing data bits.
+
+**Decoded bit-by-bit:**
+
+```
+bit 0       : BFINAL = 1
+bits 1-2    : BTYPE  = 10 (DYNAMIC)
+bits 3-7    : HLIT   = 0  -> 257 literal/length codes total
+bits 8-12   : HDIST  = 1  -> 2 distance codes total (1 used + 1 RFC-required dummy)
+bits 13-16  : HCLEN  = 14 -> 18 code-length-code lengths follow
+bits 17-70  : 18 × 3 bits of CL-code lengths in bl_order. Only two are nonzero:
+                bl_order[ 2]=18 -> length 1
+                bl_order[17]= 1 -> length 1
+              All others = 0.
+```
+
+**Implication:** the CL-code Huffman tree has 2 symbols with 1-bit codes:
+
+```
+sym1  ("literal code-length 1") -> code 0  (1 bit)
+sym18 ("run of 11..138 zeros")  -> code 1  (1 bit)
+```
+
+The literal+distance code-length stream is therefore RLE-compressed using
+just two CL symbols. For `'A'×14`:
+
+```
+65 zeros (symbols 0..64)         -> sym18 + 7-bit run=54         (8 bits)
+length 1 at symbol 65 ('A')      -> sym1                          (1 bit)
+138 zeros (symbols 66..203)      -> sym18 + 7-bit run=127         (8 bits)
+52 zeros  (symbols 204..255)     -> sym18 + 7-bit run=41          (8 bits)
+length 1 at symbol 256 (EOB)     -> sym1                          (1 bit)
+length 1 at distance[0]          -> sym1                          (1 bit)
+length 1 at distance[1] (dummy)  -> sym1                          (1 bit)
+                                                                  --------
+                                          literal+dist tree total  28 bits
+```
+
+Then the actual block data — 14 literal codes + 1 EOB:
+
+```
+literal Huffman tree (canonical, sorted by (length, symbol)):
+  sym 65  ('A')  -> code 0  (1 bit)
+  sym 256 (EOB)  -> code 1  (1 bit)
+14 × 'A' = 14 bits, then EOB = 1 bit                              (15 bits)
+```
+
+Grand total: 17 (header) + 54 (CL lengths) + 28 (lit+dist tree) + 15 (data)
+= 114 bits → padded to 120 = **15 bytes** ✓ (matches probe).
+
+**The `alt 'A'/0xFF × 14` case** (2 distinct literals) extends this:
+CL-code lengths now have `sym1=1, sym2=2, sym18=2` (three CL symbols),
+giving a 3-symbol CL Huffman tree with codes `0, 10, 11`.
+
+**The `'ABC'×5` case** (3 distinct literals at n=15) pivoted back to FIXED —
+confirms zlib's cost model is doing its job; dynamic-tree overhead exceeds
+fixed-tree savings for this many distinct symbols at this input length.
+
+**Byte fixtures for v0.1 DYNAMIC tests:**
+
+| Input        | Bytes                                                    | Total (B) |
+|---           |---                                                       |---         |
+| `'A'×14`     | `05 c1 81 00 00 00 00 00 90 36 ff 53 00 00 02`           | 15         |
+| `NUL×12`     | `05 c1 81 00 00 00 00 00 10 ff d5 00 80`                 | 13         |
+| `0xFF×11`    | `05 c1 81 00 00 00 00 00 90 ff 6a 00 40`                 | 13         |
+| alt `A`/0xFF×14 | `05 c1 01 01 00 00 00 80 90 6d fd 1f 25 92 24 c9`     | 16         |
+
+These become the failing-test anchors for `encodeDynamicHuffmanLiterals`.
+
