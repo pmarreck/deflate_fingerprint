@@ -148,6 +148,14 @@ pub const FINGERPRINTS = [_]Fingerprint{
     .{ .id = 25, .description = "zlib level=7 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel7Filtered },
     .{ .id = 26, .description = "zlib level=8 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel8Filtered },
     .{ .id = 27, .description = "zlib level=9 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel9Filtered },
+
+    // ─── Microsoft Office / Java DeflaterOutputStream pattern ─────────────
+    // zlib L1 default data block (BFINAL=0) + Z_SYNC_FLUSH marker + empty
+    // Z_FINISH block. Used by Microsoft Excel/.xlsx (and likely other Office
+    // OOXML output) and any Java DeflaterOutputStream wrapping a Deflater
+    // at level=BEST_SPEED that calls flush() before close() (e.g. Apache POI).
+    // Empirically discovered via tools/zip_corpus_probe.zig on a real .xlsx.
+    .{ .id = 28, .description = "Microsoft OOXML / Java DeflaterOutputStream L1 + SYNC_FLUSH + FINISH", .encode = encoder.encodeOfficeOPC },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.

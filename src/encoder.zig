@@ -853,6 +853,53 @@ pub fn encodeZlibRLE(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return encodeMultiBlock3Way(allocator, tokens);
 }
 
+// ─── Microsoft OOXML / Office OPC encoder ─────────────────────────────────
+//
+// Microsoft Office's .xlsx / .docx / .pptx files (and Java's
+// DeflaterOutputStream when level=1 + flush+finish, e.g. Apache POI) wrap
+// zlib L1 default output as a multi-block stream with this trailer pattern:
+//
+//   <data block, BFINAL=0, BTYPE=10 DYNAMIC or 01 FIXED>
+//   <SYNC_FLUSH marker: empty BFINAL=0 STORED block>   = 5 bytes "00 00 00 ff ff"
+//                                                        (or 4 bytes "00 00 ff ff"
+//                                                        if the data block already
+//                                                        ended at a byte boundary)
+//   <FINISH: empty BFINAL=1 FIXED block>                = 2 bytes "03 00"
+//
+// Standard zlib at level=1 would emit a single BFINAL=1 block; Office
+// emits it as BFINAL=0 then explicitly flushes+finishes. Most likely cause:
+// the encoder API exposes Flush() separately from Close(), and the caller
+// (Office's OPC packaging library) calls both.
+//
+// Empirically confirmed by stripping the trailer + flipping BFINAL on real
+// .xlsx entries and verifying byte-for-byte match against zlib L1 default.
+
+pub fn encodeOfficeOPC(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
+    defer allocator.free(tokens);
+
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    // Multi-block: split tokens at zlib's 16383-symbol boundary, emit each
+    // chunk via the 3-way dispatcher with BFINAL=0 (since SYNC_FLUSH +
+    // empty FINISH below will terminate the stream).
+    const chunk_symbols: usize = 16383;
+    var i: usize = 0;
+    while (i < tokens.len) {
+        const end = @min(i + chunk_symbols, tokens.len);
+        try emitBlockFromTokensWithDynamicInto(&bw, allocator, tokens[i..end], 0);
+        i = end;
+    }
+    // (Empty input: no data blocks emitted; SYNC_FLUSH + FINISH alone produce
+    // valid DEFLATE that inflates to nothing.)
+    // SYNC_FLUSH: empty BFINAL=0 STORED block (byte-aligns + 00 00 ff ff).
+    try emitStoredBlock(&bw, &.{}, 0);
+    // FINISH: empty BFINAL=1 FIXED block (3-bit header + 7-bit EOB).
+    try emitFixedHuffmanFromTokensBlock(&bw, &.{}, 1);
+
+    return bw.toOwnedSlice();
+}
 
 // ─── Phase F debug tests ──────────────────────────────────────────────────
 
