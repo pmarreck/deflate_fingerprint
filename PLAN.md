@@ -1,7 +1,6 @@
 # deflate_fingerprint — Plan
 
 ## In Progress
-
 - [x] Initial scaffolding committed; project handed to next LLM for implementation (2026-05-20)
 - [x] Pinned to Zig 0.16.0 via mitchellh/zig-overlay; scaffold builds + tests pass under 0.16
 - [x] Test harness counts passes correctly (`zig build test --summary all`); fixed scaffold bug where Garnix `checks` were nested at `checks.<sys>.<sys>` and silently skipped; added `pkgs.zlib` to flake devShell + test derivation as test-time oracle (2026-05-21)
@@ -20,15 +19,16 @@
 - [x] **TOO_FAR rule (2026-05-22):** zlib's deflate_slow rejects length-3 matches with distance > 4096 (folded into the FILTERED reject conditional since zlib shares the path in trees.c). We were accepting them, leading to divergent LZ77 token streams on inputs > ~5KB. Corpus hit rate: 79% → **96%**. All default/fixed/filtered misses eliminated; remaining 18 misses are HUFFMAN_ONLY + RLE on the single corpus file > 16KB (multi-block).
 - [x] **Multi-block HUFFMAN_ONLY + RLE (2026-05-22):** Refactored block emitters (`encodeFixedHuffmanLiterals`, `encodeDynamicHuffmanLiterals`, `encodeFixedHuffmanFromTokens`, `encodeDynamicHuffmanFromTokens`, `encodeBlockFromTokensWithDynamic`) to have `emit*Block(bw, ..., bfinal)` variants that take a shared BitWriter; existing public functions are thin wrappers. Added `emitStoredBlock` for byte-aligned STORED chunks within a shared bit stream. HUFFMAN_ONLY splits input at 16383 bytes per chunk with per-chunk 3-way FIXED/DYNAMIC/STORED dispatch; RLE splits at 16383 tokens. **Corpus hit rate: 96% → 100% — all 500 streams identified byte-exact.**
 - [x] **Module split (2026-05-22):** Extracted `src/bitstream.zig` (BitWriter + fixed-Huffman emit primitives), `src/huffman.zig` (tree builder + canonical codes + scan/send_tree RLE), `src/match.zig` (Token/Match/LZ77Params + greedy/lazy/RLE tokenizers + longestMatch), `src/blocks.zig` (length/distance code tables + token utilities + emit*Block primitives + 3-way dispatchers). `src/encoder.zig` retained for top-level fingerprint functions only (encodeZlibStored/HuffmanOnly/Level*/Fixed/Filtered/RLE). Size: encoder.zig 2360 → 1027 lines (~56% reduction). All 86 tests still green.
-- [ ] Implement zlib-quirks behavior tables (`src/encoder_zlib.zig`): 9 levels × 5 strategies, less the collapses we've already discovered (HUFFMAN_ONLY across all (level, memLevel) = 1 fingerprint)
+- [ ] Decide whether to keep the current inline zlib registry/encoder functions through v0.1 or promote them into `src/encoder_zlib.zig` behavior tables before release
 - [x] **`@cImport(zlib.h)` fidelity harness (2026-05-22):** `src/fidelity.zig` exposes `compressWithZlib(allocator, raw, level, strategy)` and `assertByteExact(allocator, raw, level, strategy, our_encode_fn)`. Tests now declare "encoder X must match zlib L=k strategy=S on input Y" and the harness computes ground truth at test time via @cImport — eliminating brittle embedded hex-byte fixtures. `build.zig` updated to link libC + system zlib for the test target. 10 new fidelity tests (7 direct + 1 sweep covering 10 levels). Suite: 86 → 96 tests passing.
 - [x] **Multi-block generalization to default + Z_FIXED + Z_FILTERED (2026-05-22):** Added `encodeMultiBlock3Way` and `encodeMultiBlock2Way` helpers in `blocks.zig`; all `encodeZlibLevel{1..9}` / `*Fixed` / `*Filtered` / `RLE` now route through them. Internal corpus stays at 100%; exposed a separate L1 divergence on 46KB-class inputs (token-stream divergence, NOT multi-block — both ours and zlib emit single block at this size).
 - [x] **`tools/zip_corpus_probe.zig` real-world probe (2026-05-22):** Walks a directory of ZIP-format archives (.zip/.docx/.jar/.epub/.odt/.xlsx/.pptx/.apk/...), parses central directories, extracts raw-DEFLATE payloads of every method=8 entry, inflates via libz for ground truth, runs identifier, tallies hits per fingerprint. Runs via `nix develop -c zig build probe -- /path` (not installed by default; needs zlib).
   - **First real-world signal: 70.9% hit rate on ~/Downloads (936 DEFLATE streams across 10 archives).** Fingerprint #4 (L6 default) alone covers 77% of hits — confirms L6 default is the dominant config in the wild. Remaining ~30% misses are mostly an Apple Mac installer (likely Apple's encoder family) plus a few large inputs hitting the L1 divergence.
 - [ ] Implement the detection algorithm (`src/identify.zig`) with early-bailout stream-comparison
 - [ ] Implement registry data file format (`src/registry.zig`)
-- [ ] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`)
-- [ ] C CLI (`cli/main.c`): `identify`, `reproduce`, `list`, `--help`, `--about`
+- [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
+- [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
+- [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports
 - [ ] Corpus harvest: collect 1000+ real-world `.docx` / `.xlsx` / `.epub` / `.zip` / `.jar` files from public sources; verify ≥70% hit rate
 - [ ] Garnix CI green on `packages.default` + `checks.test`
 - [ ] Cross-compile for 5 OS/arch combos (Mac aarch64, Linux aarch64/x86_64, Windows aarch64/x86_64)
@@ -81,4 +81,4 @@
 
 ## Completed
 
-(none yet — project just scaffolded)
+- [x] Refresh stale public/status docs and add `dirtree` annotations to reflect current 28-fingerprint state, blar/difz integration role, and active Excel large-entry investigation (2026-05-24 23:50 EDT)

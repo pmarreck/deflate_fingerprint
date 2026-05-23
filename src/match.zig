@@ -86,6 +86,18 @@ pub const LZ77_LEVEL_7_FILTERED: LZ77Params = .{ .max_chain_length = 256,  .good
 pub const LZ77_LEVEL_8_FILTERED: LZ77Params = .{ .max_chain_length = 1024, .good_match = 32, .nice_match = 258, .max_lazy_match = 128, .filtered = true };
 pub const LZ77_LEVEL_9_FILTERED: LZ77Params = .{ .max_chain_length = 4096, .good_match = 32, .nice_match = 258, .max_lazy_match = 258, .filtered = true };
 
+/// zlib's MAX_DIST: the maximum permissible match distance.
+/// = window_size - MIN_LOOKAHEAD, where MIN_LOOKAHEAD = max_match + min_match + 1.
+/// For default params (window=32768, max_match=258, min_match=3):
+/// MAX_DIST = 32768 - 262 = 32506. NOT 32768. Real zlib reserves the last
+/// MIN_LOOKAHEAD bytes of the window as a safety buffer for sliding; matches
+/// with distance > MAX_DIST are silently rejected. On inputs > 32506 bytes,
+/// using the wrong limit causes hash-chain entries to be accepted that zlib
+/// would reject, diverging the token stream and breaking byte-exact match.
+inline fn maxDist(params: LZ77Params) usize {
+    return params.window_size - (@as(usize, params.max_match) + params.min_match + 1);
+}
+
 /// Tokenize `raw` into a sequence of literal/match tokens via the LZ77
 /// algorithm parameterized by `params`. Matches zlib's `deflate_fast` for
 /// level=1 (and is the foundation for levels 2-3; lazy matching for 4-9
@@ -136,7 +148,7 @@ pub fn lz77Tokenize(
         var match_distance: u16 = 0;
         if (hash_head != 0
             and strstart > hash_head
-            and (strstart - hash_head) <= params.window_size
+            and (strstart - hash_head) <= maxDist(params)
             and lookahead >= params.min_match)
         {
             // Greedy: `prev_length = 0` so longestMatch reports any match >= MIN_MATCH.
@@ -243,7 +255,7 @@ pub fn lz77TokenizeSlow(
         if (hash_head != 0
             and prev_length < params.max_lazy_match
             and strstart > hash_head
-            and (strstart - hash_head) <= params.window_size
+            and (strstart - hash_head) <= maxDist(params)
             and lookahead >= params.min_match)
         {
             const result = longestMatch(raw, strstart, hash_head, prev, params, lookahead, win_mask, prev_length);
@@ -377,8 +389,17 @@ fn longestMatch(
     const max_len: u16 = @intCast(@min(@as(usize, params.max_match), lookahead));
     var cur_match: usize = cur_match_in;
 
+    // zlib's longest_match stops walking the chain when cur_match goes below
+    // `limit = strstart - MAX_DIST` — matches with distance > MAX_DIST are
+    // never considered. Without this, on inputs > 32506 bytes our chain walks
+    // accept stale positions zlib already discards via slide_hash, diverging
+    // the token stream.
+    const md = maxDist(params);
+    const limit: usize = if (strstart > md) strstart - md else 0;
+
     while (true) {
         if (cur_match >= strstart) break;
+        if (cur_match <= limit) break;
 
         var n: u16 = 0;
         while (n < max_len and raw[strstart + n] == raw[cur_match + n]) : (n += 1) {}

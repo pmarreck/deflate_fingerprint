@@ -1,0 +1,21 @@
+# Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
+ver=1.2
+depth=3
+
+annotate=[
+	README.md = Public overview: current status, blar/difz role, build commands, CLI surface.
+	SESSION_RESUME.md = Live handoff for MAX_DIST fix and active Excel sheet2 large-entry investigation.
+	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
+	docs/DEFLATE_DIALS.md = Catalog of DEFLATE dials that create valid but byte-distinct streams.
+	docs/ENCODER_NOTES.md = Append-only empirical findings by encoder/probe; confirmed behavior lives here.
+	docs/V0.1_STATUS.md = Current v0.1 checkpoint: 28 fingerprints, 96 tests, real-world corpus notes, active gaps.
+	include/deflate_fingerprint.h = Public C FFI header for non-Zig callers including blar.
+	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.
+	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, multi-block dispatch helpers.
+	src/encoder.zig = Top-level fingerprint encoders: zlib variants plus Office OPC flush/finish behavior.
+	src/fidelity.zig = Test-only real-zlib oracle via @cImport(zlib.h) for byte-exact fidelity checks.
+	src/huffman.zig = zlib-compatible Huffman tree builder, canonical codes, and code-length RLE.
+	src/lib.zig = Public Zig API, inline fingerprint registry, identify/encode dispatch, C FFI exports.
+	src/match.zig = zlib-style LZ77 tokenizers, longestMatch, and zlib MAX_DIST behavior.
+	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, inflates with libz, identifies fingerprints.
+]
