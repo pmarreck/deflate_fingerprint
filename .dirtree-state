@@ -10,11 +10,11 @@ annotate=[
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
 	docs/DEFLATE_DIALS.md = Catalog of DEFLATE dials that create valid but byte-distinct streams.
 	docs/ENCODER_NOTES.md = Append-only empirical findings by encoder/probe; confirmed behavior lives here.
-	docs/V0.1_STATUS.md = Current v0.1 checkpoint: 28 fingerprints, 105 tests, Excel/OOXML producer variance and large-entry gaps.
+	docs/V0.1_STATUS.md = Current v0.1 checkpoint: 28 fingerprints, 108 tests, Excel/OOXML producer variance and large-entry gaps.
 	include/deflate_fingerprint.h = Public C FFI header for non-Zig callers including blar.
 	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.
 	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, raw-slice-aware multi-block dispatch helpers.
-	src/encoder.zig = Top-level fingerprint encoders: zlib variants plus Office OPC flush/finish behavior.
+	src/encoder.zig = Top-level fingerprint encoders: zlib variants, Office OPC, and experimental Excel worksheet candidates.
 	src/fidelity.zig = Test-only real-zlib oracle via @cImport(zlib.h) for byte-exact fidelity checks.
 	src/huffman.zig = zlib-compatible Huffman tree builder, canonical codes, and code-length RLE.
 	src/inspect.zig = Pure DEFLATE block inspector; reports block type plus compressed/raw ranges for boundary analysis.
@@ -22,5 +22,6 @@ annotate=[
 	src/match.zig = zlib-style LZ77 tokenizers, longestMatch, and zlib MAX_DIST behavior.
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
+	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE candidates and optional parameter sweeps against raw/target streams.
 	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, and miss block shapes.
 ]

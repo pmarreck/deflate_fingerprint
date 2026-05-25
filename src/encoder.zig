@@ -29,6 +29,8 @@ const scanCodeLengths = huffman.scanCodeLengths;
 const sendCodeLengths = huffman.sendCodeLengths;
 const BL_ORDER = huffman.BL_ORDER;
 
+const inspect = @import("inspect.zig");
+
 const match_mod = @import("match.zig");
 pub const Token = match_mod.Token;
 pub const Match = match_mod.Match;
@@ -947,30 +949,335 @@ pub fn encodeZlibRLE(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 // .xlsx entries and verifying byte-for-byte match against zlib L1 default.
 
 pub fn encodeOfficeOPC(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeOfficeOPCChunked(allocator, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
+}
+
+fn encodeOfficeOPCChunked(allocator: std.mem.Allocator, raw: []const u8, chunk_symbols: usize) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
     defer allocator.free(tokens);
 
+    return encodeOfficeOPCFromTokens(allocator, raw, tokens, chunk_symbols, &.{}, 0, 1);
+}
+
+fn tokenRawLen(token: Token) usize {
+    return switch (token) {
+        .literal => 1,
+        .match => |m| m.length,
+    };
+}
+
+fn writeEmptyStoredBlocks(bw: *BitWriter, count: usize) !void {
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        try emitStoredBlock(bw, &.{}, 0);
+    }
+}
+
+fn encodeOfficeOPCFromTokens(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    tokens: []const Token,
+    chunk_symbols: usize,
+    flush_offsets: []const usize,
+    internal_flush_count: usize,
+    final_flush_count: usize,
+) ![]u8 {
     var bw = BitWriter.init(allocator);
     errdefer bw.deinit();
 
-    // Multi-block: split tokens at zlib's 16383-symbol boundary, emit each
-    // chunk via the 3-way dispatcher with BFINAL=0 (since SYNC_FLUSH +
-    // empty FINISH below will terminate the stream).
-    const chunk_symbols: usize = 16383;
     var i: usize = 0;
+    var raw_pos: usize = 0;
+    var next_flush_index: usize = 0;
     while (i < tokens.len) {
-        const end = @min(i + chunk_symbols, tokens.len);
-        try emitBlockFromTokensWithDynamicInto(&bw, allocator, tokens[i..end], 0);
-        i = end;
+        while (next_flush_index < flush_offsets.len and flush_offsets[next_flush_index] <= raw_pos) : (next_flush_index += 1) {
+            if (flush_offsets[next_flush_index] == raw_pos) try writeEmptyStoredBlocks(&bw, internal_flush_count);
+        }
+
+        const next_flush = if (next_flush_index < flush_offsets.len) flush_offsets[next_flush_index] else raw.len;
+        const start_i = i;
+        const start_raw = raw_pos;
+        var symbols: usize = 0;
+        while (i < tokens.len and symbols < chunk_symbols) {
+            const len = tokenRawLen(tokens[i]);
+            if (raw_pos < next_flush and raw_pos + len > next_flush and i != start_i) break;
+            raw_pos += len;
+            i += 1;
+            symbols += 1;
+            if (raw_pos >= next_flush) break;
+        }
+
+        if (i == start_i) {
+            const len = tokenRawLen(tokens[i]);
+            raw_pos += len;
+            i += 1;
+        }
+
+        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[start_i..i], raw[start_raw..raw_pos], 0);
     }
+    while (next_flush_index < flush_offsets.len) : (next_flush_index += 1) {
+        if (flush_offsets[next_flush_index] == raw_pos) try writeEmptyStoredBlocks(&bw, internal_flush_count);
+    }
+    std.debug.assert(raw_pos == raw.len);
     // (Empty input: no data blocks emitted; SYNC_FLUSH + FINISH alone produce
     // valid DEFLATE that inflates to nothing.)
     // SYNC_FLUSH: empty BFINAL=0 STORED block (byte-aligns + 00 00 ff ff).
-    try emitStoredBlock(&bw, &.{}, 0);
+    try writeEmptyStoredBlocks(&bw, final_flush_count);
     // FINISH: empty BFINAL=1 FIXED block (3-bit header + 7-bit EOB).
     try emitFixedHuffmanFromTokensBlock(&bw, &.{}, 1);
 
     return bw.toOwnedSlice();
+}
+
+fn emitChunkedTokenBlocks(
+    bw: *BitWriter,
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    chunk_symbols: usize,
+) !void {
+    const tokens = try lz77Tokenize(allocator, raw, params);
+    defer allocator.free(tokens);
+
+    var i: usize = 0;
+    var raw_pos: usize = 0;
+    while (i < tokens.len) {
+        const end = @min(i + chunk_symbols, tokens.len);
+        const raw_end = raw_pos + tokenStreamRawLen(tokens[i..end]);
+        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw.*, allocator, tokens[i..end], raw[raw_pos..raw_end], 0);
+        raw_pos = raw_end;
+        i = end;
+    }
+    std.debug.assert(raw_pos == raw.len);
+}
+
+fn tokenIndexAtRawOffset(tokens: []const Token, offset: usize) ?usize {
+    var raw_pos: usize = 0;
+    for (tokens, 0..) |token, i| {
+        if (raw_pos == offset) return i;
+        raw_pos += tokenRawLen(token);
+        if (raw_pos > offset) return null;
+    }
+    return if (raw_pos == offset) tokens.len else null;
+}
+
+fn emitChunkedTokenBlocksFromPrefix(
+    bw: *BitWriter,
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    segment_start: usize,
+    segment_end: usize,
+    params: LZ77Params,
+    chunk_symbols: usize,
+) !void {
+    const tokens = try lz77Tokenize(allocator, raw[0..segment_end], params);
+    defer allocator.free(tokens);
+
+    var i = tokenIndexAtRawOffset(tokens, segment_start) orelse return error.FlushBoundaryInsideToken;
+    const stop = tokenIndexAtRawOffset(tokens, segment_end) orelse return error.FlushBoundaryInsideToken;
+    var raw_pos = segment_start;
+    while (i < stop) {
+        const end = @min(i + chunk_symbols, stop);
+        const raw_end = raw_pos + tokenStreamRawLen(tokens[i..end]);
+        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw.*, allocator, tokens[i..end], raw[raw_pos..raw_end], 0);
+        raw_pos = raw_end;
+        i = end;
+    }
+    std.debug.assert(raw_pos == segment_end);
+}
+
+fn encodeOfficeOPCSegmentedWithParams(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+    flush_offsets: []const usize,
+    internal_flush_count: usize,
+    final_flush_count: usize,
+) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    const adjusted = withMemLevel(params, mem_level);
+    const chunk_symbols = chunkSymbolsForMemLevel(mem_level);
+    var segment_start: usize = 0;
+    for (flush_offsets) |flush_offset| {
+        if (flush_offset < segment_start or flush_offset > raw.len) continue;
+        try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, chunk_symbols);
+        try writeEmptyStoredBlocks(&bw, internal_flush_count);
+        segment_start = flush_offset;
+    }
+
+    try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..], adjusted, chunk_symbols);
+    try writeEmptyStoredBlocks(&bw, final_flush_count);
+    try emitFixedHuffmanFromTokensBlock(&bw, &.{}, 1);
+
+    return bw.toOwnedSlice();
+}
+
+fn encodeOfficeOPCPrefixHistoryWithParams(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+    flush_offsets: []const usize,
+    internal_flush_count: usize,
+    final_flush_count: usize,
+) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    const adjusted = withMemLevel(params, mem_level);
+    const chunk_symbols = chunkSymbolsForMemLevel(mem_level);
+    var segment_start: usize = 0;
+    for (flush_offsets) |flush_offset| {
+        if (flush_offset < segment_start or flush_offset > raw.len) continue;
+        emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, flush_offset, adjusted, chunk_symbols) catch |err| switch (err) {
+            error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, chunk_symbols),
+            else => |e| return e,
+        };
+        try writeEmptyStoredBlocks(&bw, internal_flush_count);
+        segment_start = flush_offset;
+    }
+
+    emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, raw.len, adjusted, chunk_symbols) catch |err| switch (err) {
+        error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..], adjusted, chunk_symbols),
+        else => |e| return e,
+    };
+    try writeEmptyStoredBlocks(&bw, final_flush_count);
+    try emitFixedHuffmanFromTokensBlock(&bw, &.{}, 1);
+
+    return bw.toOwnedSlice();
+}
+
+fn worksheetFlushOffsets(raw: []const u8) struct { offsets: [2]usize, len: usize } {
+    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData") orelse return .{ .offsets = undefined, .len = 0 };
+    const sheet_end_start = std.mem.indexOf(u8, raw, "</sheetData>") orelse return .{ .offsets = undefined, .len = 0 };
+    const sheet_end = sheet_end_start + "</sheetData>".len;
+    if (sheet_start >= sheet_end or sheet_end > raw.len) return .{ .offsets = undefined, .len = 0 };
+    return .{ .offsets = .{ sheet_start, sheet_end }, .len = 2 };
+}
+
+fn encodeExcelWorksheetOPCWithParams(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+) ![]u8 {
+    const flushes = worksheetFlushOffsets(raw);
+    return encodeOfficeOPCSegmentedWithParams(
+        allocator,
+        raw,
+        params,
+        mem_level,
+        flushes.offsets[0..flushes.len],
+        2,
+        1,
+    );
+}
+
+pub fn encodeExcelWorksheetOPCMem7Level2(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeExcelWorksheetOPCWithParams(allocator, raw, LZ77_LEVEL_2, 7);
+}
+
+pub fn encodeExcelWorksheetOPCMem7Level3(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeExcelWorksheetOPCWithParams(allocator, raw, LZ77_LEVEL_3, 7);
+}
+
+pub fn encodeExcelWorksheetOPCMem7FastParams(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    max_chain_length: u32,
+    nice_match: u16,
+    max_insert_length: u16,
+) ![]u8 {
+    const params: LZ77Params = .{
+        .max_chain_length = max_chain_length,
+        .good_match = 4,
+        .nice_match = nice_match,
+        .max_lazy_match = max_insert_length,
+    };
+    return encodeExcelWorksheetOPCWithParams(allocator, raw, params, 7);
+}
+
+pub fn encodeExcelWorksheetOPCMem7FastParamsHistory(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    max_chain_length: u32,
+    nice_match: u16,
+    max_insert_length: u16,
+) ![]u8 {
+    const params: LZ77Params = .{
+        .max_chain_length = max_chain_length,
+        .good_match = 4,
+        .nice_match = nice_match,
+        .max_lazy_match = max_insert_length,
+    };
+    const flushes = worksheetFlushOffsets(raw);
+    return encodeOfficeOPCPrefixHistoryWithParams(
+        allocator,
+        raw,
+        params,
+        7,
+        flushes.offsets[0..flushes.len],
+        2,
+        1,
+    );
+}
+
+test "encodeOfficeOPC chunking tolerates matches that reference prior chunks" {
+    const got = try encodeOfficeOPCChunked(testing.allocator, "XABCABC", 4);
+    defer testing.allocator.free(got);
+    try testing.expect(got.len > 0);
+}
+
+test "encodeExcelWorksheetOPCMem7Level3 emits worksheet boundary flush markers" {
+    const raw = "<worksheet><sheetData><row r=\"1\"><c>ABCABC</c></row></sheetData><autoFilter/>";
+    const got = try encodeExcelWorksheetOPCMem7Level3(testing.allocator, raw);
+    defer testing.allocator.free(got);
+
+    const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(blocks_seen);
+
+    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData").?;
+    const sheet_end = std.mem.indexOf(u8, raw, "</sheetData>").? + "</sheetData>".len;
+    var start_flushes: usize = 0;
+    var end_flushes: usize = 0;
+    var final_flushes: usize = 0;
+    for (blocks_seen) |block| {
+        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
+        if (block.raw_start == sheet_start) start_flushes += 1;
+        if (block.raw_start == sheet_end) end_flushes += 1;
+        if (block.raw_start == raw.len) final_flushes += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), start_flushes);
+    try testing.expectEqual(@as(usize, 2), end_flushes);
+    try testing.expectEqual(@as(usize, 1), final_flushes);
+}
+
+test "encodeExcelWorksheetOPCMem7FastParamsHistory emits worksheet boundary flush markers" {
+    const raw = "<worksheet><sheetData><row r=\"1\"><c>ABCABC</c></row></sheetData><autoFilter/>";
+    const got = try encodeExcelWorksheetOPCMem7FastParamsHistory(testing.allocator, raw, 16, 28, 4);
+    defer testing.allocator.free(got);
+
+    const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(blocks_seen);
+
+    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData").?;
+    const sheet_end = std.mem.indexOf(u8, raw, "</sheetData>").? + "</sheetData>".len;
+    var start_flushes: usize = 0;
+    var end_flushes: usize = 0;
+    var final_flushes: usize = 0;
+    for (blocks_seen) |block| {
+        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
+        if (block.raw_start == sheet_start) start_flushes += 1;
+        if (block.raw_start == sheet_end) end_flushes += 1;
+        if (block.raw_start == raw.len) final_flushes += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), start_flushes);
+    try testing.expectEqual(@as(usize, 2), end_flushes);
+    try testing.expectEqual(@as(usize, 1), final_flushes);
 }
 
 // ─── Phase F debug tests ──────────────────────────────────────────────────

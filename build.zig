@@ -100,6 +100,24 @@ pub fn build(b: *std.Build) void {
     const block_inspect_install = b.addInstallArtifact(block_inspect, .{});
     b.step("block-inspect-install", "Install deflate-block-inspect to zig-out/bin").dependOn(&block_inspect_install.step);
 
+    // ─── Excel worksheet candidate probe ─────────────────────────────────
+    // Dev helper for comparing hypothesized large-worksheet DEFLATE variants.
+    const excel_probe_mod = b.createModule(.{
+        .root_source_file = b.path("tools/excel_candidate_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    excel_probe_mod.addImport("deflate_fingerprint", core_mod);
+    const excel_probe = b.addExecutable(.{
+        .name = "excel-candidate-probe",
+        .root_module = excel_probe_mod,
+    });
+    const excel_probe_run = b.addRunArtifact(excel_probe);
+    if (b.args) |args| excel_probe_run.addArgs(args);
+    b.step("excel-probe", "Compare Excel worksheet DEFLATE candidate encoders").dependOn(&excel_probe_run.step);
+    const excel_probe_install = b.addInstallArtifact(excel_probe, .{});
+    b.step("excel-probe-install", "Install excel-candidate-probe to zig-out/bin").dependOn(&excel_probe_install.step);
+
     // ─── Unit tests ──────────────────────────────────────────────────────
     // The test binary links libC + system zlib so tests can `@cImport(zlib.h)`
     // and assert byte-exact equality against real zlib output directly,
