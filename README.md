@@ -17,7 +17,7 @@ Active reverse-engineering / implementation project.
 - 28 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
   fixed / filtered strategies, collapsed zlib HUFFMAN_ONLY and RLE fingerprints,
   plus zlib L1 explicit `SYNC_FLUSH` + empty finish handling.
-- `./test` currently passes 111 tests: Zig unit tests, CLI integration tests,
+- `./test` currently passes 112 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
@@ -60,7 +60,8 @@ care about it.
 - Encodes raw input using known DEFLATE behavior profiles.
 - Identifies the first registered profile that reproduces a target stream
   byte-for-byte.
-- Exposes a Zig API and C FFI suitable for blar and other consumers.
+- Exposes a Zig API and C FFI suitable for blar and other consumers, including
+  explicit config-driven compression via `dfp_encode_configured`.
 - Provides a CLI for current raw-stream attribution experiments.
 - Includes a ZIP-family corpus probe that extracts raw DEFLATE entries from
   `.zip`, `.docx`, `.xlsx`, `.pptx`, `.epub`, `.jar`, `.apk`, and similar files.

@@ -25,6 +25,13 @@ extern "C" {
 #define DFP_CONFIDENCE_BYTE_EXACT  0  /* encoder reproduced target exactly  */
 #define DFP_CONFIDENCE_NEAR_MATCH  1  /* best candidate diverged by N bytes */
 
+/* ── Explicit reproduction config constants ───────────────────────────── */
+
+#define DFP_TOKENIZATION_SEGMENTED       0
+#define DFP_TOKENIZATION_PREFIX_HISTORY  1
+
+#define DFP_FINISH_EMPTY_FIXED_BLOCK     0
+
 /* ── Identification result ────────────────────────────────────────────── */
 
 typedef struct {
@@ -33,6 +40,27 @@ typedef struct {
     uint8_t  _pad;             /* reserved; always 0                */
     size_t   residual_bytes;   /* 0 iff confidence == BYTE_EXACT    */
 } dfp_result_t;
+
+/* ── Explicit DEFLATE reproduction config ─────────────────────────────── */
+
+typedef struct {
+    uint32_t max_chain_length;
+    uint16_t good_match;
+    uint16_t nice_match;
+    uint16_t max_lazy_match;
+    uint16_t max_match;
+    uint8_t  min_match;
+    uint8_t  mem_level;
+    uint8_t  tokenization_mode;  /* DFP_TOKENIZATION_* */
+    uint8_t  finish_mode;        /* DFP_FINISH_*       */
+    uint8_t  filtered;           /* 0=false, nonzero=true */
+    uint8_t  _pad[7];            /* reserved; set to 0 */
+    size_t   window_size;
+    const size_t *sync_flush_offsets;
+    size_t   sync_flush_offsets_len;
+    size_t   sync_flush_empty_stored_blocks;
+    size_t   final_flush_empty_stored_blocks;
+} dfp_deflate_config_t;
 
 /* ── Public API ───────────────────────────────────────────────────────── */
 
@@ -71,7 +99,24 @@ int32_t dfp_encode(
 );
 
 /**
- * Free a buffer returned by `dfp_encode`.
+ * Encode `raw` using an explicit DEFLATE reproduction config instead of a
+ * registry fingerprint. Flush points are raw-byte offsets into `raw`; caller
+ * owns the offset array and it only needs to remain valid for this call.
+ *
+ * On success, `*out_buf` points to a heap-allocated buffer of size `*out_len`.
+ * The caller must free it via `dfp_free`.
+ *
+ * Returns 0 on success; -1 on allocation/encoding failure; -3 if `config` is
+ * invalid.
+ */
+int32_t dfp_encode_configured(
+    const uint8_t *raw, size_t raw_len,
+    const dfp_deflate_config_t *config,
+    uint8_t **out_buf, size_t *out_len
+);
+
+/**
+ * Free a buffer returned by `dfp_encode` or `dfp_encode_configured`.
  */
 void dfp_free(uint8_t *buf, size_t len);
 

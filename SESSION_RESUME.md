@@ -21,7 +21,7 @@ needs byte-identical reconstruction of embedded compressed streams).
   - Fileserver Books / 100 ePubs (13,761):  73.4%
   - Fileserver Downloads (6,091):           85.7%
   - Fileserver Documents / 2 .xlsx (516):   66.1% with fingerprint #28
-- 111 full-suite tests green; current module architecture includes
+- 112 full-suite tests green; current module architecture includes
   bitstream/huffman/match/blocks/encoder/fidelity/inspect/ooxml/lib.
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
   reports per-fingerprint hits, and in verbose mode prints OOXML producer
@@ -123,8 +123,8 @@ zlib encoder paths:
   chunk beginning with a match whose distance reaches into the previous chunk.
 - The registered v0.1 flush/finish wrapper now uses raw-slice-aware chunk emission too; this is pinned
   by a small cross-chunk-match regression test.
-- Full suite is now 111/111 green after moving worksheet-specific core tests
-  into generic configuration coverage.
+- Full suite is now 112/112 green after moving worksheet-specific core tests
+  into generic configuration coverage and adding C FFI config coverage.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
@@ -224,6 +224,9 @@ Current abstraction boundary:
   represented as `DeflateReproductionConfig` values: LZ77 params, memLevel,
   tokenization mode, raw `sync_flush_offsets`, flush marker counts, and finish
   mode.
+- The C FFI now exposes the same abstraction as `dfp_encode_configured()` using
+  `dfp_deflate_config_t`, so non-Zig callers can reproduce config-discovered
+  streams without depending on a registry ID.
 - Producer/container knowledge such as "worksheet XML", `<sheetData>` parsing,
   1024-row chunk boundaries, and labels like "Excel 16.0300" belongs in
   tests, corpus probes, or future fingerprinting heuristics that emit generic
@@ -306,6 +309,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 111/111 green.
+3. Run `./test` — should be 112/112 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

@@ -220,6 +220,72 @@ const CIdentifyResult = extern struct {
     residual_bytes: usize,
 };
 
+const C_TOKENIZATION_SEGMENTED: u8 = 0;
+const C_TOKENIZATION_PREFIX_HISTORY: u8 = 1;
+const C_FINISH_EMPTY_FIXED_BLOCK: u8 = 0;
+
+/// C-side reproduction config for `dfp_encode_configured`.
+const CDeflateConfig = extern struct {
+    max_chain_length: u32,
+    good_match: u16,
+    nice_match: u16,
+    max_lazy_match: u16,
+    max_match: u16,
+    min_match: u8,
+    mem_level: u8,
+    tokenization_mode: u8,
+    finish_mode: u8,
+    filtered: u8,
+    _pad: [7]u8 = .{0} ** 7,
+    window_size: usize,
+    sync_flush_offsets: ?[*]const usize,
+    sync_flush_offsets_len: usize,
+    sync_flush_empty_stored_blocks: usize,
+    final_flush_empty_stored_blocks: usize,
+};
+
+fn configFromC(c: *const CDeflateConfig) !encoder.DeflateReproductionConfig {
+    const mem_level: u4 = if (c.mem_level >= 1 and c.mem_level <= 9) @intCast(c.mem_level) else return error.InvalidConfig;
+    const min_match: u8 = if (c.min_match >= 3) c.min_match else return error.InvalidConfig;
+    const max_match: u16 = if (c.max_match >= min_match) c.max_match else return error.InvalidConfig;
+    const window_size = if (c.window_size > 0) c.window_size else return error.InvalidConfig;
+
+    const mode: encoder.TokenizationMode = switch (c.tokenization_mode) {
+        C_TOKENIZATION_SEGMENTED => .segmented,
+        C_TOKENIZATION_PREFIX_HISTORY => .prefix_history,
+        else => return error.InvalidConfig,
+    };
+    const finish: encoder.FinishMode = switch (c.finish_mode) {
+        C_FINISH_EMPTY_FIXED_BLOCK => .empty_fixed_block,
+        else => return error.InvalidConfig,
+    };
+    const flush_offsets = if (c.sync_flush_offsets_len == 0)
+        &[_]usize{}
+    else if (c.sync_flush_offsets) |ptr|
+        ptr[0..c.sync_flush_offsets_len]
+    else
+        return error.InvalidConfig;
+
+    return .{
+        .params = .{
+            .min_match = min_match,
+            .max_match = max_match,
+            .max_chain_length = c.max_chain_length,
+            .good_match = c.good_match,
+            .nice_match = c.nice_match,
+            .max_lazy_match = c.max_lazy_match,
+            .window_size = window_size,
+            .filtered = c.filtered != 0,
+        },
+        .mem_level = mem_level,
+        .sync_flush_offsets = flush_offsets,
+        .sync_flush_empty_stored_blocks = c.sync_flush_empty_stored_blocks,
+        .final_flush_empty_stored_blocks = c.final_flush_empty_stored_blocks,
+        .finish_mode = finish,
+        .tokenization_mode = mode,
+    };
+}
+
 /// Identify the encoder that produced `target` from `raw`. Returns 0 on
 /// success with `*out` populated; negative on internal error (e.g. OOM).
 /// `out.fingerprint_id == 0` means no candidate in the registry reproduced
@@ -264,8 +330,24 @@ export fn dfp_encode(
     return 0;
 }
 
+/// Encode `raw` from an explicit DEFLATE reproduction config. This is the C
+/// FFI counterpart to `encoder.encodeConfiguredDeflate`.
+export fn dfp_encode_configured(
+    raw: [*]const u8,
+    raw_len: usize,
+    config: *const CDeflateConfig,
+    out_buf: *[*]u8,
+    out_len: *usize,
+) callconv(.c) i32 {
+    const zig_config = configFromC(config) catch return -3;
+    const bytes = encoder.encodeConfiguredDeflate(std.heap.c_allocator, raw[0..raw_len], zig_config) catch return -1;
+    out_buf.* = bytes.ptr;
+    out_len.* = bytes.len;
+    return 0;
+}
+
 /// Free a buffer previously returned by `dfp_encode`. Uses `std.heap.c_allocator`
-/// (the same allocator `dfp_encode` allocates from).
+/// (the same allocator `dfp_encode` and `dfp_encode_configured` allocate from).
 export fn dfp_free(buf: [*]u8, len: usize) callconv(.c) void {
     std.heap.c_allocator.free(buf[0..len]);
 }
@@ -332,6 +414,48 @@ test "dfp_encode: unknown fingerprint_id returns -2" {
     var out_len: usize = 0;
     const rc = dfp_encode("X", 1, 9999, &out_buf, &out_len);
     try std.testing.expectEqual(@as(i32, -2), rc);
+}
+
+test "dfp_encode_configured: raw-offset flushes are exposed through C FFI" {
+    const raw = "alpha beta alpha beta";
+    const flushes = [_]usize{6};
+    const config: CDeflateConfig = .{
+        .max_chain_length = 4,
+        .good_match = 4,
+        .nice_match = 8,
+        .max_lazy_match = 4,
+        .max_match = 258,
+        .min_match = 3,
+        .mem_level = 7,
+        .tokenization_mode = C_TOKENIZATION_SEGMENTED,
+        .finish_mode = C_FINISH_EMPTY_FIXED_BLOCK,
+        .filtered = 0,
+        .window_size = 32768,
+        .sync_flush_offsets = &flushes,
+        .sync_flush_offsets_len = flushes.len,
+        .sync_flush_empty_stored_blocks = 2,
+        .final_flush_empty_stored_blocks = 1,
+    };
+
+    var out_buf: [*]u8 = undefined;
+    var out_len: usize = 0;
+    const rc = dfp_encode_configured(raw.ptr, raw.len, &config, &out_buf, &out_len);
+    try std.testing.expectEqual(@as(i32, 0), rc);
+    defer dfp_free(out_buf, out_len);
+
+    const blocks_seen = try inspect.inspectBlocks(std.testing.allocator, out_buf[0..out_len]);
+    defer std.testing.allocator.free(blocks_seen);
+
+    var configured_flushes: usize = 0;
+    var final_flushes: usize = 0;
+    for (blocks_seen) |block| {
+        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
+        if (block.raw_start == flushes[0]) configured_flushes += 1;
+        if (block.raw_start == raw.len) final_flushes += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), configured_flushes);
+    try std.testing.expectEqual(@as(usize, 1), final_flushes);
 }
 
 test "identify: round-trip via Zig API matches the FFI path" {
