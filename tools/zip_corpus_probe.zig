@@ -126,6 +126,29 @@ fn inflateRaw(
     return allocator.realloc(out, out_len);
 }
 
+fn extractEntryOriginal(
+    allocator: std.mem.Allocator,
+    buf: []const u8,
+    method: u16,
+    lfh_off: u32,
+    compressed_size: u32,
+    uncompressed_size: u32,
+) ![]u8 {
+    if (compressed_size == 0xFFFFFFFF or uncompressed_size == 0xFFFFFFFF) return error.Zip64Entry;
+    if (@as(usize, lfh_off) + 30 > buf.len) return error.TruncatedLFH;
+    if (readU32LE(buf, lfh_off) != LFH_SIG) return error.BadLFH;
+
+    const name_len = readU16LE(buf, @as(usize, lfh_off) + 26);
+    const extra_len = readU16LE(buf, @as(usize, lfh_off) + 28);
+    const data_off: usize = @as(usize, lfh_off) + 30 + @as(usize, name_len) + @as(usize, extra_len);
+    if (data_off + @as(usize, compressed_size) > buf.len) return error.EntryDataOutOfRange;
+    const compressed = buf[data_off .. data_off + @as(usize, compressed_size)];
+
+    if (method == 0) return allocator.dupe(u8, compressed);
+    if (method == METHOD_DEFLATE) return inflateRaw(allocator, compressed, uncompressed_size);
+    return error.UnsupportedMethod;
+}
+
 /// Process one ZIP-format archive in memory.
 fn processArchive(
     allocator: std.mem.Allocator,
@@ -162,6 +185,18 @@ fn processArchive(
         const comment_len = readU16LE(buf, p + 32);
         const lfh_off = readU32LE(buf, p + 42);
         const cde_total: usize = 46 + @as(usize, name_len) + @as(usize, extra_len) + @as(usize, comment_len);
+        const name = buf[p + 46 .. p + 46 + @as(usize, name_len)];
+
+        if (verbose and std.mem.eql(u8, name, "docProps/app.xml")) {
+            if (extractEntryOriginal(allocator, buf, method, lfh_off, compressed_size, uncompressed_size)) |xml| {
+                defer allocator.free(xml);
+                const meta = dfp.ooxml.parseAppMetadata(xml);
+                std.debug.print("    ooxml app: application=\"{s}\" appVersion=\"{s}\"\n", .{
+                    meta.application orelse "",
+                    meta.app_version orelse "",
+                });
+            } else |_| {}
+        }
 
         stats.entries_total += 1;
         if (method == 0) {

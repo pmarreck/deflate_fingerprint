@@ -178,6 +178,42 @@ Updated hypothesis:
   generate reference streams with adjusted zlib config and flush cadence, then
   compare first divergence/token stream.
 
+## Producer/version variance concern (Peter, 2026-05-25)
+
+Do **not** assume there is one universal "Excel" DEFLATE fingerprint. Different
+Excel versions, platforms, OOXML packaging layers, Java/.NET libraries, or zlib
+versions may use different compression parameters or even different deflate
+implementations.
+
+Local metadata already shows why this matters:
+- CPI workbook: `Application=Microsoft Excel`, `AppVersion=16.0300`, ZIP
+  version-made-by 4.5, deflate subtype `superfast`.
+- Small sample workbook: `Application=Microsoft Excel`, `AppVersion=14.0300`,
+  ZIP version-made-by 4.5, deflate subtype `superfast`.
+- LibreOffice template: `Application=LibreOffice/6.1.0.3...`, ZIP
+  version-made-by 2.0, deflate subtype `normal`.
+
+Project stance:
+- Stable fingerprint IDs should represent byte-reproduction behavior, not a
+  marketing/application label.
+- Producer labels like "Microsoft Excel 16.0300" should be evidence attached to
+  a corpus observation or registry entry, with version/platform ranges only
+  after repeated confirmation.
+- The next probe should cluster OOXML streams by observable DEFLATE behavior
+  (block cadence, flush markers, zlib level/memLevel match, byte-exact ID),
+  while also recording producer metadata from `docProps/app.xml` and ZIP
+  central-directory fields.
+
+Implemented first response:
+- Added `src/ooxml.zig` with tested `parseAppMetadata()` for `Application` and
+  `AppVersion`.
+- `zip_corpus_probe --verbose` now prints OOXML app metadata when
+  `docProps/app.xml` is present.
+- Local probe examples:
+  - CPI workbook: `Microsoft Excel`, `AppVersion=16.0300`
+  - sample workbook: `Microsoft Excel`, `AppVersion=14.0300`
+  - scorely template: `LibreOffice/6.1.0.3...`
+
 ## Outstanding gaps to close
 
 1. **Resolve sheet2 / Excel large-entry mystery** (current focus).
