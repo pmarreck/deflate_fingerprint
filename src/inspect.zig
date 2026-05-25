@@ -5,6 +5,7 @@
 //! on zlib internals or doing file I/O.
 
 const std = @import("std");
+const huffman = @import("huffman.zig");
 
 pub const BlockType = enum(u2) {
     stored = 0,
@@ -87,6 +88,23 @@ fn readFixedLitLen(reader: *BitReader) InspectError!u16 {
 
 fn fixedDistanceCode(reader: *BitReader) InspectError!u16 {
     return try reader.readMsbCode(5);
+}
+
+fn decodeSymbol(
+    reader: *BitReader,
+    lens: []const u8,
+    codes: []const u32,
+    max_bits: u8,
+) InspectError!u16 {
+    var code: u32 = 0;
+    var bits: u8 = 1;
+    while (bits <= max_bits) : (bits += 1) {
+        code = (code << 1) | try reader.readBits(1);
+        for (lens, 0..) |len, symbol| {
+            if (len == bits and codes[symbol] == code) return @intCast(symbol);
+        }
+    }
+    return error.BadHuffmanCode;
 }
 
 const LengthInfo = struct {
@@ -191,6 +209,83 @@ fn inspectFixedPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize {
     }
 }
 
+fn repeatCodeLength(lens: []u8, index: *usize, repeat: usize, value: u8) InspectError!void {
+    if (index.* + repeat > lens.len) return error.BadHuffmanCode;
+    @memset(lens[index.* .. index.* + repeat], value);
+    index.* += repeat;
+}
+
+fn inspectDynamicPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize {
+    const hlit_count: usize = @as(usize, try reader.readBits(5)) + 257;
+    const hdist_count: usize = @as(usize, try reader.readBits(5)) + 1;
+    const hclen_count: usize = @as(usize, try reader.readBits(4)) + 4;
+
+    var bl_lens = [_]u8{0} ** 19;
+    var i: usize = 0;
+    while (i < hclen_count) : (i += 1) {
+        bl_lens[huffman.BL_ORDER[i]] = @intCast(try reader.readBits(3));
+    }
+
+    var bl_codes: [19]u32 = undefined;
+    huffman.computeCanonicalCodes(&bl_lens, &bl_codes);
+
+    var combined_lens = [_]u8{0} ** 316;
+    const total_lens = hlit_count + hdist_count;
+    var lens_index: usize = 0;
+    var prev_len: u8 = 0;
+    while (lens_index < total_lens) {
+        const symbol = try decodeSymbol(reader, &bl_lens, &bl_codes, 7);
+        if (symbol <= 15) {
+            combined_lens[lens_index] = @intCast(symbol);
+            prev_len = @intCast(symbol);
+            lens_index += 1;
+        } else if (symbol == 16) {
+            if (lens_index == 0) return error.BadHuffmanCode;
+            const repeat: usize = @as(usize, try reader.readBits(2)) + 3;
+            try repeatCodeLength(combined_lens[0..total_lens], &lens_index, repeat, prev_len);
+        } else if (symbol == 17) {
+            const repeat: usize = @as(usize, try reader.readBits(3)) + 3;
+            try repeatCodeLength(combined_lens[0..total_lens], &lens_index, repeat, 0);
+            prev_len = 0;
+        } else if (symbol == 18) {
+            const repeat: usize = @as(usize, try reader.readBits(7)) + 11;
+            try repeatCodeLength(combined_lens[0..total_lens], &lens_index, repeat, 0);
+            prev_len = 0;
+        } else {
+            return error.BadHuffmanCode;
+        }
+    }
+
+    var lit_lens = [_]u8{0} ** 286;
+    @memcpy(lit_lens[0..hlit_count], combined_lens[0..hlit_count]);
+    var dist_lens = [_]u8{0} ** 30;
+    @memcpy(dist_lens[0..hdist_count], combined_lens[hlit_count..total_lens]);
+
+    var lit_codes: [286]u32 = undefined;
+    huffman.computeCanonicalCodes(&lit_lens, &lit_codes);
+    var dist_codes: [30]u32 = undefined;
+    huffman.computeCanonicalCodes(&dist_lens, &dist_codes);
+
+    var token_count: usize = 0;
+    while (true) {
+        const symbol = try decodeSymbol(reader, lit_lens[0..hlit_count], lit_codes[0..hlit_count], 15);
+        if (symbol < 256) {
+            raw_pos.* += 1;
+            token_count += 1;
+        } else if (symbol == 256) {
+            return token_count;
+        } else {
+            const len_info = try lengthInfo(symbol);
+            const extra_len: u16 = @intCast(try reader.readBits(len_info.extra_bits));
+            const distance_symbol = try decodeSymbol(reader, dist_lens[0..hdist_count], dist_codes[0..hdist_count], 15);
+            const dist_info = try distanceInfo(distance_symbol);
+            _ = try reader.readBits(dist_info.extra_bits);
+            raw_pos.* += @as(usize, len_info.base + extra_len);
+            token_count += 1;
+        }
+    }
+}
+
 /// Inspect raw RFC 1951 DEFLATE blocks and return compressed/raw block ranges.
 /// The first increment handles STORED blocks; Huffman block decoding follows.
 pub fn inspectBlocks(allocator: std.mem.Allocator, deflate: []const u8) ![]BlockInfo {
@@ -217,7 +312,7 @@ pub fn inspectBlocks(allocator: std.mem.Allocator, deflate: []const u8) ![]Block
                 token_count = len;
             },
             .fixed => token_count = try inspectFixedPayload(&reader, &raw_pos),
-            .dynamic => return error.UnsupportedBlockType,
+            .dynamic => token_count = try inspectDynamicPayload(&reader, &raw_pos),
             .reserved => return error.ReservedBlockType,
         }
 
@@ -276,4 +371,40 @@ test "inspectBlocks reports fixed-Huffman literal block ranges" {
     try testing.expectEqual(@as(usize, 0), blocks[0].raw_start);
     try testing.expectEqual(raw.len, blocks[0].raw_end);
     try testing.expectEqual(raw.len, blocks[0].token_count);
+}
+
+test "inspectBlocks reports dynamic-Huffman literal block ranges" {
+    const raw = "A" ** 14;
+    const deflated = try encoder.encodeDynamicHuffmanLiterals(testing.allocator, raw);
+    defer testing.allocator.free(deflated);
+
+    const blocks = try inspectBlocks(testing.allocator, deflated);
+    defer testing.allocator.free(blocks);
+
+    try testing.expectEqual(@as(usize, 1), blocks.len);
+    try testing.expectEqual(true, blocks[0].bfinal);
+    try testing.expectEqual(BlockType.dynamic, blocks[0].block_type);
+    try testing.expectEqual(@as(usize, 0), blocks[0].compressed_start_bit);
+    try testing.expectEqual(@as(usize, 114), blocks[0].compressed_end_bit);
+    try testing.expectEqual(@as(usize, 0), blocks[0].raw_start);
+    try testing.expectEqual(raw.len, blocks[0].raw_end);
+    try testing.expectEqual(raw.len, blocks[0].token_count);
+}
+
+test "inspectBlocks reports dynamic-Huffman match block raw range" {
+    const chunk =
+        "# deflate_fingerprint\n\nIdentify which DEFLATE encoder implementation produced a ";
+    const raw = chunk ++ chunk;
+    const deflated = try encoder.encodeZlibLevel1(testing.allocator, raw);
+    defer testing.allocator.free(deflated);
+
+    const blocks = try inspectBlocks(testing.allocator, deflated);
+    defer testing.allocator.free(blocks);
+
+    try testing.expectEqual(@as(usize, 1), blocks.len);
+    try testing.expectEqual(true, blocks[0].bfinal);
+    try testing.expectEqual(BlockType.dynamic, blocks[0].block_type);
+    try testing.expectEqual(@as(usize, 0), blocks[0].raw_start);
+    try testing.expectEqual(raw.len, blocks[0].raw_end);
+    try testing.expect(blocks[0].token_count < raw.len);
 }
