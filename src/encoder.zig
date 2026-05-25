@@ -76,6 +76,27 @@ const encodeMultiBlock3WayChunkedFromRaw = blocks.encodeMultiBlock3WayChunkedFro
 const encodeMultiBlock2WayChunkedFromRaw = blocks.encodeMultiBlock2WayChunkedFromRaw;
 const chunkSymbolsForMemLevel = blocks.chunkSymbolsForMemLevel;
 
+pub const TokenizationMode = enum {
+    segmented,
+    prefix_history,
+};
+
+pub const FinishMode = enum {
+    empty_fixed_block,
+};
+
+pub const DeflateReproductionConfig = struct {
+    params: LZ77Params,
+    mem_level: u4 = 8,
+    sync_flush_offsets: []const usize = &.{},
+    sync_flush_empty_stored_blocks: usize = 1,
+    final_flush_empty_stored_blocks: usize = 0,
+    /// Currently supported stream terminator: an empty BFINAL=1 fixed-Huffman
+    /// block, matching DEFLATE streams that call finish after explicit flushes.
+    finish_mode: FinishMode = .empty_fixed_block,
+    tokenization_mode: TokenizationMode = .segmented,
+};
+
 /// Encode `raw` as a single DEFLATE block with BFINAL=1, BTYPE=01 (fixed
 /// Huffman tables per RFC 1951 §3.2.6), containing only literal symbols
 /// followed by the end-of-block symbol 256. No LZ77 match finding.
@@ -371,14 +392,20 @@ fn emitDynamicHuffmanLiteralsBlock(
     var max_lit: usize = 256; // EOB always non-zero
     var i: usize = 285;
     while (i > 256) : (i -= 1) {
-        if (lit_lens[i] != 0) { max_lit = i; break; }
+        if (lit_lens[i] != 0) {
+            max_lit = i;
+            break;
+        }
     }
     var max_dist: usize = 0;
     var j: usize = 29;
     while (j > 0) : (j -= 1) {
-        if (dist_lens[j] != 0) { max_dist = j; break; }
+        if (dist_lens[j] != 0) {
+            max_dist = j;
+            break;
+        }
     }
-    const hlit_count: usize = max_lit + 1;  // 257..286
+    const hlit_count: usize = max_lit + 1; // 257..286
     const hdist_count: usize = max_dist + 1; // 1..30
 
     // 5. Scan lit+dist length sequences to build bl_freq.
@@ -915,7 +942,6 @@ pub fn encodeZlibLevel9Filtered(allocator: std.mem.Allocator, raw: []const u8) !
     return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
-
 /// zlib Z_RLE strategy (any level 1-9). Tokens are produced by RLE-only
 /// match finding, then encoded via the standard 3-way Huffman dispatcher.
 /// Multi-block: splits the token stream at zlib's lit_bufsize-1 (16383 at
@@ -927,11 +953,10 @@ pub fn encodeZlibRLE(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
-// ─── Microsoft OOXML / Office OPC encoder ─────────────────────────────────
+// ─── Flush/finish-compatible DEFLATE encoder ──────────────────────────────
 //
-// Microsoft Office's .xlsx / .docx / .pptx files (and Java's
-// DeflaterOutputStream when level=1 + flush+finish, e.g. Apache POI) wrap
-// zlib L1 default output as a multi-block stream with this trailer pattern:
+// Some producer APIs expose flush and finish as separate operations. One common
+// resulting stream shape wraps zlib-compatible data blocks with this pattern:
 //
 //   <data block, BFINAL=0, BTYPE=10 DYNAMIC or 01 FIXED>
 //   <SYNC_FLUSH marker: empty BFINAL=0 STORED block>   = 5 bytes "00 00 00 ff ff"
@@ -940,23 +965,17 @@ pub fn encodeZlibRLE(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 //                                                        ended at a byte boundary)
 //   <FINISH: empty BFINAL=1 FIXED block>                = 2 bytes "03 00"
 //
-// Standard zlib at level=1 would emit a single BFINAL=1 block; Office
-// emits it as BFINAL=0 then explicitly flushes+finishes. Most likely cause:
-// the encoder API exposes Flush() separately from Close(), and the caller
-// (Office's OPC packaging library) calls both.
-//
-// Empirically confirmed by stripping the trailer + flipping BFINAL on real
-// .xlsx entries and verifying byte-for-byte match against zlib L1 default.
-
-pub fn encodeOfficeOPC(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    return encodeOfficeOPCChunked(allocator, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
+/// Registered v0.1 behavior: zlib level-1 default data followed by explicit
+/// flush and finish markers. Prefer `encodeConfiguredDeflate` for new callers.
+pub fn encodeZlibLevel1FlushFinish(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeFlushFinishChunked(allocator, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
-fn encodeOfficeOPCChunked(allocator: std.mem.Allocator, raw: []const u8, chunk_symbols: usize) ![]u8 {
+fn encodeFlushFinishChunked(allocator: std.mem.Allocator, raw: []const u8, chunk_symbols: usize) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
     defer allocator.free(tokens);
 
-    return encodeOfficeOPCFromTokens(allocator, raw, tokens, chunk_symbols, &.{}, 0, 1);
+    return encodeFlushFinishFromTokens(allocator, raw, tokens, chunk_symbols, &.{}, 0, 1);
 }
 
 fn tokenRawLen(token: Token) usize {
@@ -973,7 +992,7 @@ fn writeEmptyStoredBlocks(bw: *BitWriter, count: usize) !void {
     }
 }
 
-fn encodeOfficeOPCFromTokens(
+fn encodeFlushFinishFromTokens(
     allocator: std.mem.Allocator,
     raw: []const u8,
     tokens: []const Token,
@@ -1085,7 +1104,7 @@ fn emitChunkedTokenBlocksFromPrefix(
     std.debug.assert(raw_pos == segment_end);
 }
 
-fn encodeOfficeOPCSegmentedWithParams(
+fn encodeSegmentedConfiguredDeflate(
     allocator: std.mem.Allocator,
     raw: []const u8,
     params: LZ77Params,
@@ -1114,7 +1133,7 @@ fn encodeOfficeOPCSegmentedWithParams(
     return bw.toOwnedSlice();
 }
 
-fn encodeOfficeOPCPrefixHistoryWithParams(
+fn encodePrefixHistoryConfiguredDeflate(
     allocator: std.mem.Allocator,
     raw: []const u8,
     params: LZ77Params,
@@ -1149,231 +1168,71 @@ fn encodeOfficeOPCPrefixHistoryWithParams(
     return bw.toOwnedSlice();
 }
 
-fn worksheetFlushOffsets(raw: []const u8) struct { offsets: [2]usize, len: usize } {
-    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData") orelse return .{ .offsets = undefined, .len = 0 };
-    const sheet_end_start = std.mem.indexOf(u8, raw, "</sheetData>") orelse return .{ .offsets = undefined, .len = 0 };
-    const sheet_end = sheet_end_start + "</sheetData>".len;
-    if (sheet_start >= sheet_end or sheet_end > raw.len) return .{ .offsets = undefined, .len = 0 };
-    return .{ .offsets = .{ sheet_start, sheet_end }, .len = 2 };
-}
-
-/// Infer worksheet sync-flush boundaries at sheetData and row chunk starts.
-/// Excel large sheets can flush before rows 1025, 2049, ... within sheetData.
-fn worksheetRowChunkFlushOffsets(allocator: std.mem.Allocator, raw: []const u8, row_chunk: u32) ![]usize {
-    var offsets: std.ArrayList(usize) = .empty;
-    errdefer offsets.deinit(allocator);
-
-    const base = worksheetFlushOffsets(raw);
-    if (base.len == 0) return offsets.toOwnedSlice(allocator);
-    const sheet_start = base.offsets[0];
-    const sheet_end = base.offsets[1];
-    try offsets.append(allocator, sheet_start);
-    if (row_chunk == 0) {
-        try offsets.append(allocator, sheet_end);
-        return offsets.toOwnedSlice(allocator);
+/// Encode raw RFC 1951 DEFLATE from an explicit reproduction configuration.
+/// Flush behavior is modeled as raw offsets; format-specific code lives outside.
+pub fn encodeConfiguredDeflate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    config: DeflateReproductionConfig,
+) ![]u8 {
+    switch (config.finish_mode) {
+        .empty_fixed_block => {},
     }
 
-    const prefix = "<row r=\"";
-    var scan = sheet_start;
-    while (scan < sheet_end) {
-        const rel = std.mem.indexOf(u8, raw[scan..sheet_end], prefix) orelse break;
-        const row_start = scan + rel;
-        const number_start = row_start + prefix.len;
-        const number_end_rel = std.mem.indexOfScalar(u8, raw[number_start..sheet_end], '"') orelse break;
-        const number_end = number_start + number_end_rel;
-        const row_number = std.fmt.parseInt(u32, raw[number_start..number_end], 10) catch {
-            scan = number_end + 1;
-            continue;
-        };
-        if (row_number > 1 and (row_number - 1) % row_chunk == 0) {
-            try offsets.append(allocator, row_start);
-        }
-        scan = number_end + 1;
-    }
-
-    try offsets.append(allocator, sheet_end);
-    return offsets.toOwnedSlice(allocator);
-}
-
-fn encodeExcelWorksheetOPCWithParams(
-    allocator: std.mem.Allocator,
-    raw: []const u8,
-    params: LZ77Params,
-    mem_level: u4,
-) ![]u8 {
-    const flushes = worksheetFlushOffsets(raw);
-    return encodeOfficeOPCSegmentedWithParams(
-        allocator,
-        raw,
-        params,
-        mem_level,
-        flushes.offsets[0..flushes.len],
-        2,
-        1,
-    );
-}
-
-pub fn encodeExcelWorksheetOPCMem7Level2(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    return encodeExcelWorksheetOPCWithParams(allocator, raw, LZ77_LEVEL_2, 7);
-}
-
-pub fn encodeExcelWorksheetOPCMem7Level3(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    return encodeExcelWorksheetOPCWithParams(allocator, raw, LZ77_LEVEL_3, 7);
-}
-
-pub fn encodeExcelWorksheetOPCMem7FastParams(
-    allocator: std.mem.Allocator,
-    raw: []const u8,
-    max_chain_length: u32,
-    nice_match: u16,
-    max_insert_length: u16,
-) ![]u8 {
-    const params: LZ77Params = .{
-        .max_chain_length = max_chain_length,
-        .good_match = 4,
-        .nice_match = nice_match,
-        .max_lazy_match = max_insert_length,
+    return switch (config.tokenization_mode) {
+        .segmented => encodeSegmentedConfiguredDeflate(
+            allocator,
+            raw,
+            config.params,
+            config.mem_level,
+            config.sync_flush_offsets,
+            config.sync_flush_empty_stored_blocks,
+            config.final_flush_empty_stored_blocks,
+        ),
+        .prefix_history => encodePrefixHistoryConfiguredDeflate(
+            allocator,
+            raw,
+            config.params,
+            config.mem_level,
+            config.sync_flush_offsets,
+            config.sync_flush_empty_stored_blocks,
+            config.final_flush_empty_stored_blocks,
+        ),
     };
-    return encodeExcelWorksheetOPCWithParams(allocator, raw, params, 7);
 }
 
-pub fn encodeExcelWorksheetOPCMem7FastParamsHistory(
-    allocator: std.mem.Allocator,
-    raw: []const u8,
-    max_chain_length: u32,
-    nice_match: u16,
-    max_insert_length: u16,
-) ![]u8 {
-    const params: LZ77Params = .{
-        .max_chain_length = max_chain_length,
-        .good_match = 4,
-        .nice_match = nice_match,
-        .max_lazy_match = max_insert_length,
-    };
-    const flushes = worksheetFlushOffsets(raw);
-    return encodeOfficeOPCPrefixHistoryWithParams(
-        allocator,
-        raw,
-        params,
-        7,
-        flushes.offsets[0..flushes.len],
-        2,
-        1,
-    );
-}
-
-pub fn encodeExcelWorksheetOPCMem7FastParamsRowChunks(
-    allocator: std.mem.Allocator,
-    raw: []const u8,
-    max_chain_length: u32,
-    nice_match: u16,
-    max_insert_length: u16,
-    row_chunk: u32,
-) ![]u8 {
-    const params: LZ77Params = .{
-        .max_chain_length = max_chain_length,
-        .good_match = 4,
-        .nice_match = nice_match,
-        .max_lazy_match = max_insert_length,
-    };
-    const flushes = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
-    defer allocator.free(flushes);
-    return encodeOfficeOPCSegmentedWithParams(
-        allocator,
-        raw,
-        params,
-        7,
-        flushes,
-        2,
-        1,
-    );
-}
-
-test "encodeOfficeOPC chunking tolerates matches that reference prior chunks" {
-    const got = try encodeOfficeOPCChunked(testing.allocator, "XABCABC", 4);
+test "flush-finish chunking tolerates matches that reference prior chunks" {
+    const got = try encodeFlushFinishChunked(testing.allocator, "XABCABC", 4);
     defer testing.allocator.free(got);
     try testing.expect(got.len > 0);
 }
 
-test "encodeExcelWorksheetOPCMem7Level3 emits worksheet boundary flush markers" {
-    const raw = "<worksheet><sheetData><row r=\"1\"><c>ABCABC</c></row></sheetData><autoFilter/>";
-    const got = try encodeExcelWorksheetOPCMem7Level3(testing.allocator, raw);
+test "encodeConfiguredDeflate emits configured raw-offset sync flush markers" {
+    const raw = "alpha beta alpha beta";
+    const flushes = [_]usize{6};
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .mem_level = 7,
+        .sync_flush_offsets = &flushes,
+        .sync_flush_empty_stored_blocks = 2,
+        .final_flush_empty_stored_blocks = 1,
+        .tokenization_mode = .segmented,
+    });
     defer testing.allocator.free(got);
 
     const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
     defer testing.allocator.free(blocks_seen);
 
-    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData").?;
-    const sheet_end = std.mem.indexOf(u8, raw, "</sheetData>").? + "</sheetData>".len;
-    var start_flushes: usize = 0;
-    var end_flushes: usize = 0;
+    var configured_flushes: usize = 0;
     var final_flushes: usize = 0;
     for (blocks_seen) |block| {
         if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
-        if (block.raw_start == sheet_start) start_flushes += 1;
-        if (block.raw_start == sheet_end) end_flushes += 1;
+        if (block.raw_start == flushes[0]) configured_flushes += 1;
         if (block.raw_start == raw.len) final_flushes += 1;
     }
 
-    try testing.expectEqual(@as(usize, 2), start_flushes);
-    try testing.expectEqual(@as(usize, 2), end_flushes);
+    try testing.expectEqual(@as(usize, 2), configured_flushes);
     try testing.expectEqual(@as(usize, 1), final_flushes);
-}
-
-test "encodeExcelWorksheetOPCMem7FastParamsHistory emits worksheet boundary flush markers" {
-    const raw = "<worksheet><sheetData><row r=\"1\"><c>ABCABC</c></row></sheetData><autoFilter/>";
-    const got = try encodeExcelWorksheetOPCMem7FastParamsHistory(testing.allocator, raw, 16, 28, 4);
-    defer testing.allocator.free(got);
-
-    const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
-    defer testing.allocator.free(blocks_seen);
-
-    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData").?;
-    const sheet_end = std.mem.indexOf(u8, raw, "</sheetData>").? + "</sheetData>".len;
-    var start_flushes: usize = 0;
-    var end_flushes: usize = 0;
-    var final_flushes: usize = 0;
-    for (blocks_seen) |block| {
-        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
-        if (block.raw_start == sheet_start) start_flushes += 1;
-        if (block.raw_start == sheet_end) end_flushes += 1;
-        if (block.raw_start == raw.len) final_flushes += 1;
-    }
-
-    try testing.expectEqual(@as(usize, 2), start_flushes);
-    try testing.expectEqual(@as(usize, 2), end_flushes);
-    try testing.expectEqual(@as(usize, 1), final_flushes);
-}
-
-test "encodeExcelWorksheetOPCMem7FastParamsRowChunks emits row chunk flush markers" {
-    const raw =
-        "<worksheet><sheetData>" ++
-        "<row r=\"1\"><c>A</c></row>" ++
-        "<row r=\"2\"><c>B</c></row>" ++
-        "<row r=\"3\"><c>C</c></row>" ++
-        "</sheetData><autoFilter/>";
-    const got = try encodeExcelWorksheetOPCMem7FastParamsRowChunks(testing.allocator, raw, 16, 60, 4, 2);
-    defer testing.allocator.free(got);
-
-    const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
-    defer testing.allocator.free(blocks_seen);
-
-    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData").?;
-    const row3_start = std.mem.indexOf(u8, raw, "<row r=\"3\"").?;
-    const sheet_end = std.mem.indexOf(u8, raw, "</sheetData>").? + "</sheetData>".len;
-    var sheet_start_flushes: usize = 0;
-    var row3_flushes: usize = 0;
-    var sheet_end_flushes: usize = 0;
-    for (blocks_seen) |block| {
-        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
-        if (block.raw_start == sheet_start) sheet_start_flushes += 1;
-        if (block.raw_start == row3_start) row3_flushes += 1;
-        if (block.raw_start == sheet_end) sheet_end_flushes += 1;
-    }
-
-    try testing.expectEqual(@as(usize, 2), sheet_start_flushes);
-    try testing.expectEqual(@as(usize, 2), row3_flushes);
-    try testing.expectEqual(@as(usize, 2), sheet_end_flushes);
 }
 
 // ─── Phase F debug tests ──────────────────────────────────────────────────

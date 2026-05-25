@@ -11,24 +11,24 @@ compressed byte stream by reproducing the exact byte stream from the
 uncompressed input. Downstream consumer: `../blar` (archive format that
 needs byte-identical reconstruction of embedded compressed streams).
 
-## Current state (parent = mrzxkyku 52d33aae)
+## Current state (parent = wlkkmnkw a0af9f8b)
 
 - 28 fingerprints registered (zlib L0-L9 × default/HUFFMAN_ONLY/RLE/FIXED/FILTERED
-  + Microsoft OOXML / Office OPC).
+  + zlib L1 explicit `SYNC_FLUSH` + empty finish).
 - Internal corpus: 100% hit rate (10 project files × 10 levels × 5 strategies = 500 streams).
 - Real-world corpora:
   - ~/Downloads (936 streams):              70.9%
   - Fileserver Books / 100 ePubs (13,761):  73.4%
   - Fileserver Downloads (6,091):           85.7%
   - Fileserver Documents / 2 .xlsx (516):   66.1% with fingerprint #28
-- 113 full-suite tests green; current module architecture includes
+- 111 full-suite tests green; current module architecture includes
   bitstream/huffman/match/blocks/encoder/fidelity/inspect/ooxml/lib.
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
   reports per-fingerprint hits, and in verbose mode prints OOXML producer
   metadata plus compact block summaries for misses. Build via
   `nix develop -c zig build probe-install`. Use `--excel-experimental` to
-  count the current unregistered worksheet candidate against worksheet XML
-  entries.
+  count the current probe-only worksheet candidates against worksheet XML
+  entries. Worksheet/producer inference is intentionally tool-side.
 - `tools/excel_candidate_probe.zig` compares worksheet-specific candidate
   encoders against a raw worksheet and target DEFLATE stream. Build/run via
   `nix develop -c zig build excel-probe -- RAW TARGET [--sweep]`.
@@ -57,7 +57,7 @@ Changes applied and committed:
 Excel `.xlsx` `xl/worksheets/sheet2.xml` entry:
 - Original: 279,493 bytes
 - Excel compressed: 52,876 bytes (BFINAL=0, BTYPE=DYNAMIC, trails with `00 00 ff ff 03 00`)
-- Our encodeOfficeOPC: 53,419 bytes
+- Registered v0.1 flush/finish encoder: 53,419 bytes
 - **Mystery:** Excel's stripped data block is **smaller than any zlib level
   (1-9)**:
     - L1: 53413B
@@ -121,9 +121,10 @@ zlib encoder paths:
 - Token-only multi-block helpers now reconstruct the full raw stream once and
   delegate into raw-slice-aware per-chunk emission. A regression test covers a
   chunk beginning with a match whose distance reaches into the previous chunk.
-- `encodeOfficeOPC` now uses raw-slice-aware chunk emission too; this is pinned
+- The registered v0.1 flush/finish wrapper now uses raw-slice-aware chunk emission too; this is pinned
   by a small cross-chunk-match regression test.
-- Full suite is now 113/113 green.
+- Full suite is now 111/111 green after moving worksheet-specific core tests
+  into generic configuration coverage.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
@@ -207,7 +208,7 @@ Updated hypothesis:
   - `nice=60`: CPI `sheet3.xml`, `sheet5.xml`
   - `row1024`: CPI `sheet6.xml`
   LibreOffice `scorely` and Excel 14 sample worksheet entries are not exact.
-  This supports Peter's concern: Office worksheet behavior should be clustered
+  This supports Peter's concern: worksheet behavior should be clustered
   by byte-reproduction behavior, not labeled as one universal Excel encoder.
 - Follow-up parameter checks on extracted CPI false negatives:
   - `sheet3.xml` and `sheet5.xml` reproduce byte-exact with segmented
@@ -217,6 +218,16 @@ Updated hypothesis:
     The key clue was that the previous best candidate over-matched across raw
     offset 859,844, exactly where the target stream has two empty STORED flush
     blocks before row 1025.
+
+Current abstraction boundary:
+- Core encoder code is producer-agnostic. New reproduction behavior should be
+  represented as `DeflateReproductionConfig` values: LZ77 params, memLevel,
+  tokenization mode, raw `sync_flush_offsets`, flush marker counts, and finish
+  mode.
+- Producer/container knowledge such as "worksheet XML", `<sheetData>` parsing,
+  1024-row chunk boundaries, and labels like "Excel 16.0300" belongs in
+  tests, corpus probes, or future fingerprinting heuristics that emit generic
+  configs. It should not become application-named main encoder logic.
 
 ## Producer/version variance concern (Peter, 2026-05-25)
 
@@ -264,8 +275,9 @@ Current probe check:
 
 ## Outstanding gaps to close
 
-1. **Resolve sheet2 / Excel large-entry mystery** (current focus).
-2. **Validate the exact CPI worksheet hypothesis on more Excel streams**:
+1. **Generalize the probe-only worksheet clusters into abstract configs** and
+   decide when they are mature enough for stable fingerprint IDs.
+2. **Validate the exact CPI worksheet hypotheses on more producer/version corpora**:
    Cluster A: `chain=16 nice=35 insert=4` covers CPI sheets 1/2/4. Cluster B:
    `chain=16 nice=60 insert=4` covers CPI sheets 3/5. Cluster C:
    `chain=16 nice=48 insert=4 row_chunk=1024` covers CPI sheet6. Do not promote
@@ -294,5 +306,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 113/113 green.
-4. Continue with the sheet2/Excel mystery per "Specific next experiment".
+3. Run `./test` — should be 111/111 green.
+4. Continue with abstract stream-divergence analysis; named producer details
+   should remain in probes/tests unless Peter explicitly approves otherwise.

@@ -35,7 +35,8 @@
 - [x] Fix chunked token-only block helpers so cross-block match references reconstruct from the full raw stream before per-block STORED fallback decisions; added regression test and verified CPI `.xlsx` verbose probe no longer crashes (2026-05-25 09:10 EDT)
 - [x] Add worksheet-specific Excel candidate encoders and `excel-candidate-probe`; initial CPI candidate (`chain=16 nice=28 insert=4`, memLevel=7, sheetData flushes) matched the prefix block and first 10,529 compressed bytes but was still not byte-exact (2026-05-25 09:45 EDT)
 - [x] Add token-level DEFLATE trace inspection and use it to resolve the CPI sheet2 divergence: the first miss was a too-low `nice_match` early exit; segmented `chain=16 nice=35 insert=4`, memLevel=7, with sheetData sync flushes reproduces the CPI worksheet stream byte-exact (2026-05-25 10:35 EDT)
-- [x] Add `zip-corpus-probe --excel-experimental` to count unregistered worksheet candidate coverage across OOXML corpora; local `/tmp/dfp_xlsx_probe_dir` result: 6/8 worksheet XML entries exact across three Excel 16 CPI clusters (`nice=35`: sheets 1/2/4, `nice=60`: sheets 3/5, `row1024`: sheet6) (2026-05-25 11:35 EDT)
+- [x] Add `zip-corpus-probe --excel-experimental` to count unregistered worksheet candidate coverage across OOXML corpora; local `/tmp/dfp_xlsx_probe_dir` result: 6/8 worksheet XML entries exact across three Excel 16 CPI clusters (`nice=35`: sheets 1/2/4, `nice=60`: sheets 3/5, `row1024`: sheet6) (2026-05-25 11:20 EDT)
+- [x] Move worksheet/producer-specific reproduction details out of the core encoder path: `src/encoder.zig` now exposes abstract `DeflateReproductionConfig` with raw sync-flush offsets, while Excel/worksheet inference lives in probes/tests (2026-05-25 11:24 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports
@@ -96,13 +97,14 @@
   parameter clusters (`nice=35` and `nice=60`) (2026-05-25 11:20 EDT)
 - [x] Excel worksheet follow-up: resolve CPI `sheet6`; byte-exact with
   segmented `chain=16 nice=48 insert=4`, memLevel=7, plus additional sync
-  flushes at 1024-row boundaries (`row1024` cluster) (2026-05-25 11:35 EDT)
+  flushes at 1024-row boundaries (`row1024` cluster) (2026-05-25 11:20 EDT)
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific extension (DEFLATE-level vs filter-level fingerprinting separation)
 - [ ] gzip header bytes as secondary attribution signal
 - [ ] Registry distribution and update mechanism for deployed library instances
+- [ ] Promote probe-only worksheet clusters into stable generic fingerprints only after they are expressed as configurations and validated across multiple producer/version corpora; do not add core functions named after a specific application.
 
 ## Cross-product coordination
 

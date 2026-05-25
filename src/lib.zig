@@ -118,25 +118,25 @@ pub const FINGERPRINTS = [_]Fingerprint{
     // the configs that DO produce distinct bytes for specific input
     // patterns (e.g. inputs where chain depth or lazy threshold flips the
     // chosen match).
-    .{ .id = 6,  .description = "zlib level=2 DEFAULT_STRATEGY (deflate_fast, chain 8)",     .encode = encoder.encodeZlibLevel2 },
-    .{ .id = 7,  .description = "zlib level=3 DEFAULT_STRATEGY (deflate_fast, chain 32)",    .encode = encoder.encodeZlibLevel3 },
-    .{ .id = 8,  .description = "zlib level=4 DEFAULT_STRATEGY (deflate_slow, lazy 4)",      .encode = encoder.encodeZlibLevel4 },
-    .{ .id = 9,  .description = "zlib level=5 DEFAULT_STRATEGY (deflate_slow, lazy 16)",     .encode = encoder.encodeZlibLevel5 },
-    .{ .id = 10, .description = "zlib level=7 DEFAULT_STRATEGY (deflate_slow, lazy 32)",     .encode = encoder.encodeZlibLevel7 },
-    .{ .id = 11, .description = "zlib level=8 DEFAULT_STRATEGY (deflate_slow, lazy 128)",    .encode = encoder.encodeZlibLevel8 },
+    .{ .id = 6, .description = "zlib level=2 DEFAULT_STRATEGY (deflate_fast, chain 8)", .encode = encoder.encodeZlibLevel2 },
+    .{ .id = 7, .description = "zlib level=3 DEFAULT_STRATEGY (deflate_fast, chain 32)", .encode = encoder.encodeZlibLevel3 },
+    .{ .id = 8, .description = "zlib level=4 DEFAULT_STRATEGY (deflate_slow, lazy 4)", .encode = encoder.encodeZlibLevel4 },
+    .{ .id = 9, .description = "zlib level=5 DEFAULT_STRATEGY (deflate_slow, lazy 16)", .encode = encoder.encodeZlibLevel5 },
+    .{ .id = 10, .description = "zlib level=7 DEFAULT_STRATEGY (deflate_slow, lazy 32)", .encode = encoder.encodeZlibLevel7 },
+    .{ .id = 11, .description = "zlib level=8 DEFAULT_STRATEGY (deflate_slow, lazy 128)", .encode = encoder.encodeZlibLevel8 },
 
     // ─── Z_FIXED strategy: forces BTYPE=01 (fixed Huffman) per block. ───
     // STORED can still win on small inputs. L0 + Z_FIXED collapses to
     // fingerprint #1 (zlib emits STORED at level=0 regardless of strategy).
-    .{ .id = 12, .description = "zlib level=1 Z_FIXED (greedy LZ77, force fixed Huffman)",    .encode = encoder.encodeZlibLevel1Fixed },
-    .{ .id = 13, .description = "zlib level=2 Z_FIXED",                                       .encode = encoder.encodeZlibLevel2Fixed },
-    .{ .id = 14, .description = "zlib level=3 Z_FIXED",                                       .encode = encoder.encodeZlibLevel3Fixed },
-    .{ .id = 15, .description = "zlib level=4 Z_FIXED (lazy LZ77, force fixed Huffman)",      .encode = encoder.encodeZlibLevel4Fixed },
-    .{ .id = 16, .description = "zlib level=5 Z_FIXED",                                       .encode = encoder.encodeZlibLevel5Fixed },
-    .{ .id = 17, .description = "zlib level=6 Z_FIXED",                                       .encode = encoder.encodeZlibLevel6Fixed },
-    .{ .id = 18, .description = "zlib level=7 Z_FIXED",                                       .encode = encoder.encodeZlibLevel7Fixed },
-    .{ .id = 19, .description = "zlib level=8 Z_FIXED",                                       .encode = encoder.encodeZlibLevel8Fixed },
-    .{ .id = 20, .description = "zlib level=9 Z_FIXED",                                       .encode = encoder.encodeZlibLevel9Fixed },
+    .{ .id = 12, .description = "zlib level=1 Z_FIXED (greedy LZ77, force fixed Huffman)", .encode = encoder.encodeZlibLevel1Fixed },
+    .{ .id = 13, .description = "zlib level=2 Z_FIXED", .encode = encoder.encodeZlibLevel2Fixed },
+    .{ .id = 14, .description = "zlib level=3 Z_FIXED", .encode = encoder.encodeZlibLevel3Fixed },
+    .{ .id = 15, .description = "zlib level=4 Z_FIXED (lazy LZ77, force fixed Huffman)", .encode = encoder.encodeZlibLevel4Fixed },
+    .{ .id = 16, .description = "zlib level=5 Z_FIXED", .encode = encoder.encodeZlibLevel5Fixed },
+    .{ .id = 17, .description = "zlib level=6 Z_FIXED", .encode = encoder.encodeZlibLevel6Fixed },
+    .{ .id = 18, .description = "zlib level=7 Z_FIXED", .encode = encoder.encodeZlibLevel7Fixed },
+    .{ .id = 19, .description = "zlib level=8 Z_FIXED", .encode = encoder.encodeZlibLevel8Fixed },
+    .{ .id = 20, .description = "zlib level=9 Z_FIXED", .encode = encoder.encodeZlibLevel9Fixed },
 
     // ─── Z_RLE strategy: matches limited to distance=1 (run-length only). ──
     // Levels 1-9 collapse to identical output (chain/lazy params irrelevant).
@@ -146,20 +146,18 @@ pub const FINGERPRINTS = [_]Fingerprint{
     // ─── Z_FILTERED strategy: deflate_slow rejects matches with length <= 5. ──
     // L1-L3 + Z_FILTERED collapse to L1-L3 default (deflate_fast ignores
     // strategy in match acceptance). L0 + Z_FILTERED -> STORED via #1.
-    .{ .id = 22, .description = "zlib level=4 Z_FILTERED (lazy LZ77, reject len<=5)",                .encode = encoder.encodeZlibLevel4Filtered },
-    .{ .id = 23, .description = "zlib level=5 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel5Filtered },
-    .{ .id = 24, .description = "zlib level=6 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel6Filtered },
-    .{ .id = 25, .description = "zlib level=7 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel7Filtered },
-    .{ .id = 26, .description = "zlib level=8 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel8Filtered },
-    .{ .id = 27, .description = "zlib level=9 Z_FILTERED",                                          .encode = encoder.encodeZlibLevel9Filtered },
+    .{ .id = 22, .description = "zlib level=4 Z_FILTERED (lazy LZ77, reject len<=5)", .encode = encoder.encodeZlibLevel4Filtered },
+    .{ .id = 23, .description = "zlib level=5 Z_FILTERED", .encode = encoder.encodeZlibLevel5Filtered },
+    .{ .id = 24, .description = "zlib level=6 Z_FILTERED", .encode = encoder.encodeZlibLevel6Filtered },
+    .{ .id = 25, .description = "zlib level=7 Z_FILTERED", .encode = encoder.encodeZlibLevel7Filtered },
+    .{ .id = 26, .description = "zlib level=8 Z_FILTERED", .encode = encoder.encodeZlibLevel8Filtered },
+    .{ .id = 27, .description = "zlib level=9 Z_FILTERED", .encode = encoder.encodeZlibLevel9Filtered },
 
-    // ─── Microsoft Office / Java DeflaterOutputStream pattern ─────────────
+    // ─── Explicit flush + finish stream shape ─────────────────────────────
     // zlib L1 default data block (BFINAL=0) + Z_SYNC_FLUSH marker + empty
-    // Z_FINISH block. Used by Microsoft Excel/.xlsx (and likely other Office
-    // OOXML output) and any Java DeflaterOutputStream wrapping a Deflater
-    // at level=BEST_SPEED that calls flush() before close() (e.g. Apache POI).
-    // Empirically discovered via tools/zip_corpus_probe.zig on a real .xlsx.
-    .{ .id = 28, .description = "Microsoft OOXML / Java DeflaterOutputStream L1 + SYNC_FLUSH + FINISH", .encode = encoder.encodeOfficeOPC },
+    // Z_FINISH block. Producer/application labels are corpus evidence; the
+    // stable fingerprint describes only byte-reproduction behavior.
+    .{ .id = 28, .description = "zlib level=1 DEFAULT_STRATEGY + SYNC_FLUSH + empty FINISH block", .encode = encoder.encodeZlibLevel1FlushFinish },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
@@ -303,7 +301,9 @@ test "dfp_identify: 'Hello, world!' compressed at level=0 is identified as finge
     // bench/probes/zlib_level0_stored.c.
     const target = [_]u8{
         0x01, 0x0d, 0x00, 0xf2, 0xff,
-        0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64, 0x21,
+        0x48, 0x65, 0x6c, 0x6c, 0x6f,
+        0x2c, 0x20, 0x77, 0x6f, 0x72,
+        0x6c, 0x64, 0x21,
     };
     var out: CIdentifyResult = undefined;
     const rc = dfp_identify(raw.ptr, raw.len, &target, target.len, &out);

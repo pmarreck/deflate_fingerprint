@@ -21,9 +21,9 @@ const c = @cImport({
 
 // ─── ZIP format constants ────────────────────────────────────────────────
 
-const LFH_SIG: u32 = 0x04034b50;   // local file header
-const CDE_SIG: u32 = 0x02014b50;   // central directory entry
-const EOCD_SIG: u32 = 0x06054b50;  // end of central directory record
+const LFH_SIG: u32 = 0x04034b50; // local file header
+const CDE_SIG: u32 = 0x02014b50; // central directory entry
+const EOCD_SIG: u32 = 0x06054b50; // end of central directory record
 const METHOD_DEFLATE: u16 = 8;
 
 // ─── Stats ───────────────────────────────────────────────────────────────
@@ -32,8 +32,8 @@ const Stats = struct {
     files_scanned: usize = 0,
     files_failed_parse: usize = 0,
     entries_total: usize = 0,
-    entries_stored: usize = 0,          // method=0, not DEFLATE
-    entries_other_method: usize = 0,    // method != 0 && != 8
+    entries_stored: usize = 0, // method=0, not DEFLATE
+    entries_other_method: usize = 0, // method != 0 && != 8
     entries_deflate: usize = 0,
     entries_inflate_failed: usize = 0,
     entries_identified: usize = 0,
@@ -104,6 +104,87 @@ fn firstDiff(a: []const u8, b: []const u8) usize {
         if (a[i] != b[i]) return i;
     }
     return n;
+}
+
+fn fastParams(nice_match: u16) dfp.encoder.LZ77Params {
+    return .{
+        .max_chain_length = 16,
+        .good_match = 4,
+        .nice_match = nice_match,
+        .max_lazy_match = 4,
+    };
+}
+
+fn worksheetFlushOffsets(raw: []const u8) struct { offsets: [2]usize, len: usize } {
+    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData") orelse return .{ .offsets = undefined, .len = 0 };
+    const sheet_end_start = std.mem.indexOf(u8, raw, "</sheetData>") orelse return .{ .offsets = undefined, .len = 0 };
+    const sheet_end = sheet_end_start + "</sheetData>".len;
+    if (sheet_start >= sheet_end or sheet_end > raw.len) return .{ .offsets = undefined, .len = 0 };
+    return .{ .offsets = .{ sheet_start, sheet_end }, .len = 2 };
+}
+
+fn worksheetRowChunkFlushOffsets(allocator: std.mem.Allocator, raw: []const u8, row_chunk: u32) ![]usize {
+    var offsets: std.ArrayList(usize) = .empty;
+    errdefer offsets.deinit(allocator);
+
+    const base = worksheetFlushOffsets(raw);
+    if (base.len == 0) return offsets.toOwnedSlice(allocator);
+    const sheet_start = base.offsets[0];
+    const sheet_end = base.offsets[1];
+    try offsets.append(allocator, sheet_start);
+
+    const prefix = "<row r=\"";
+    var scan = sheet_start;
+    while (scan < sheet_end) {
+        const rel = std.mem.indexOf(u8, raw[scan..sheet_end], prefix) orelse break;
+        const row_start = scan + rel;
+        const number_start = row_start + prefix.len;
+        const number_end_rel = std.mem.indexOfScalar(u8, raw[number_start..sheet_end], '"') orelse break;
+        const number_end = number_start + number_end_rel;
+        const row_number = std.fmt.parseInt(u32, raw[number_start..number_end], 10) catch {
+            scan = number_end + 1;
+            continue;
+        };
+        if (row_number > 1 and (row_number - 1) % row_chunk == 0) {
+            try offsets.append(allocator, row_start);
+        }
+        scan = number_end + 1;
+    }
+
+    try offsets.append(allocator, sheet_end);
+    return offsets.toOwnedSlice(allocator);
+}
+
+fn encodeConfiguredCandidate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: dfp.encoder.LZ77Params,
+    flush_offsets: []const usize,
+) ![]u8 {
+    return dfp.encoder.encodeConfiguredDeflate(allocator, raw, .{
+        .params = params,
+        .mem_level = 7,
+        .sync_flush_offsets = flush_offsets,
+        .sync_flush_empty_stored_blocks = 2,
+        .final_flush_empty_stored_blocks = 1,
+        .tokenization_mode = .segmented,
+    });
+}
+
+fn encodeWorksheetCandidate(allocator: std.mem.Allocator, raw: []const u8, nice_match: u16) ![]u8 {
+    const flushes = worksheetFlushOffsets(raw);
+    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), flushes.offsets[0..flushes.len]);
+}
+
+fn encodeWorksheetRowChunkCandidate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    nice_match: u16,
+    row_chunk: u32,
+) ![]u8 {
+    const flushes = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    defer allocator.free(flushes);
+    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), flushes);
 }
 
 /// Scan backwards from the end of `buf` to find the EOCD signature.
@@ -299,7 +380,7 @@ fn processDeflateEntry(
     if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
         stats.excel_experimental_attempted += 1;
 
-        const got35 = dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, original, 16, 35, 4) catch null;
+        const got35 = encodeWorksheetCandidate(allocator, original, 35) catch null;
         if (got35) |candidate| {
             defer allocator.free(candidate);
             excel_experimental_len = candidate.len;
@@ -312,7 +393,7 @@ fn processDeflateEntry(
         }
 
         if (std.mem.eql(u8, excel_experimental_label, "none")) {
-            const got60 = dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, original, 16, 60, 4) catch null;
+            const got60 = encodeWorksheetCandidate(allocator, original, 60) catch null;
             if (got60) |candidate| {
                 defer allocator.free(candidate);
                 excel_experimental_len = candidate.len;
@@ -320,24 +401,24 @@ fn processDeflateEntry(
                 if (std.mem.eql(u8, candidate, compressed)) {
                     excel_experimental_label = "nice60";
                     stats.excel_experimental_exact_any += 1;
-                stats.excel_experimental_exact_nice60 += 1;
+                    stats.excel_experimental_exact_nice60 += 1;
+                }
             }
-        }
 
-        if (std.mem.eql(u8, excel_experimental_label, "none")) {
-            const got_row = dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsRowChunks(allocator, original, 16, 48, 4, 1024) catch null;
-            if (got_row) |candidate| {
-                defer allocator.free(candidate);
-                excel_experimental_len = candidate.len;
-                excel_experimental_first_diff = firstDiff(candidate, compressed);
-                if (std.mem.eql(u8, candidate, compressed)) {
-                    excel_experimental_label = "row1024";
-                    stats.excel_experimental_exact_any += 1;
-                    stats.excel_experimental_exact_row1024 += 1;
+            if (std.mem.eql(u8, excel_experimental_label, "none")) {
+                const got_row = encodeWorksheetRowChunkCandidate(allocator, original, 48, 1024) catch null;
+                if (got_row) |candidate| {
+                    defer allocator.free(candidate);
+                    excel_experimental_len = candidate.len;
+                    excel_experimental_first_diff = firstDiff(candidate, compressed);
+                    if (std.mem.eql(u8, candidate, compressed)) {
+                        excel_experimental_label = "row1024";
+                        stats.excel_experimental_exact_any += 1;
+                        stats.excel_experimental_exact_row1024 += 1;
+                    }
                 }
             }
         }
-    }
     }
 
     // Identify.
@@ -458,7 +539,10 @@ fn isZipExtension(name: []const u8) bool {
             for (tail, ext) |a, b| {
                 const al = if (a >= 'A' and a <= 'Z') a + 32 else a;
                 const bl = if (b >= 'A' and b <= 'Z') b + 32 else b;
-                if (al != bl) { eq = false; break; }
+                if (al != bl) {
+                    eq = false;
+                    break;
+                }
             }
             if (eq) return true;
         }

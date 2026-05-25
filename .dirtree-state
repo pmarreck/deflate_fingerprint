@@ -6,7 +6,7 @@ max_lines=80
 annotate=[
 	LEARNINGS.md = Session learnings and environment/build observations worth preserving.
 	README.md = Public overview: current status, blar/difz role, build commands, CLI surface.
-	SESSION_RESUME.md = Live handoff for Excel large-entry investigation, memLevel=7 evidence, and current probe/fix status.
+	SESSION_RESUME.md = Live handoff for abstract DEFLATE reproduction config work, memLevel=7 evidence, and current probe/fix status.
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
 	docs/DEFLATE_DIALS.md = Catalog of DEFLATE dials that create valid but byte-distinct streams.
 	docs/ENCODER_NOTES.md = Append-only empirical findings by encoder/probe; confirmed behavior lives here.
@@ -14,7 +14,7 @@ annotate=[
 	include/deflate_fingerprint.h = Public C FFI header for non-Zig callers including blar.
 	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.
 	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, raw-slice-aware multi-block dispatch helpers.
-	src/encoder.zig = Top-level fingerprint encoders: zlib variants, Office OPC, and experimental Excel worksheet candidates including row-chunk flush topology.
+	src/encoder.zig = Top-level fingerprint encoders plus generic DeflateReproductionConfig for raw-offset flush/finish reproduction.
 	src/fidelity.zig = Test-only real-zlib oracle via @cImport(zlib.h) for byte-exact fidelity checks.
 	src/huffman.zig = zlib-compatible Huffman tree builder, canonical codes, and code-length RLE.
 	src/inspect.zig = Pure DEFLATE inspector: block ranges plus literal/match token traces for LZ77 divergence analysis.

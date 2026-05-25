@@ -16,18 +16,17 @@ Active reverse-engineering / implementation project.
 
 - 28 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
   fixed / filtered strategies, collapsed zlib HUFFMAN_ONLY and RLE fingerprints,
-  plus Microsoft OOXML / Java `DeflaterOutputStream` OPC-style flush handling.
-- `./test` currently passes 113 tests: Zig unit tests, CLI integration tests,
+  plus zlib L1 explicit `SYNC_FLUSH` + empty finish handling.
+- `./test` currently passes 111 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
 - Real-world ZIP-family probing is underway. Current checkpoint hit rates are
   recorded in [SESSION_RESUME.md](SESSION_RESUME.md).
-- Active research target: large Microsoft Excel `.xlsx` worksheet entries whose
-  small OPC siblings match zlib L1 + flush/finish, but whose large streams do
-  not match any standard zlib level. Current probes can now reproduce the CPI
-  worksheet fixture byte-exact with a memLevel=7 segmented fast-parameter
-  hypothesis; this still needs validation across more Excel producer clusters.
+- Active research target: large ZIP-family XML streams with non-default flush
+  topology. The core now models these as abstract `DeflateReproductionConfig`
+  values with raw sync-flush offsets; named producer details such as Excel
+  worksheet structure live in probes/tests rather than the main encoder.
 
 ## Why it exists
 

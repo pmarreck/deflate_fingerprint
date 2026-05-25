@@ -19,6 +19,97 @@ fn absIsize(n: isize) usize {
     return @intCast(if (n < 0) -n else n);
 }
 
+fn fastParams(max_chain_length: u32, nice_match: u16, max_insert_length: u16) dfp.encoder.LZ77Params {
+    return .{
+        .max_chain_length = max_chain_length,
+        .good_match = 4,
+        .nice_match = nice_match,
+        .max_lazy_match = max_insert_length,
+    };
+}
+
+fn worksheetFlushOffsets(raw: []const u8) struct { offsets: [2]usize, len: usize } {
+    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData") orelse return .{ .offsets = undefined, .len = 0 };
+    const sheet_end_start = std.mem.indexOf(u8, raw, "</sheetData>") orelse return .{ .offsets = undefined, .len = 0 };
+    const sheet_end = sheet_end_start + "</sheetData>".len;
+    if (sheet_start >= sheet_end or sheet_end > raw.len) return .{ .offsets = undefined, .len = 0 };
+    return .{ .offsets = .{ sheet_start, sheet_end }, .len = 2 };
+}
+
+fn worksheetRowChunkFlushOffsets(allocator: std.mem.Allocator, raw: []const u8, row_chunk: u32) ![]usize {
+    var offsets: std.ArrayList(usize) = .empty;
+    errdefer offsets.deinit(allocator);
+
+    const base = worksheetFlushOffsets(raw);
+    if (base.len == 0) return offsets.toOwnedSlice(allocator);
+    const sheet_start = base.offsets[0];
+    const sheet_end = base.offsets[1];
+    try offsets.append(allocator, sheet_start);
+    if (row_chunk == 0) {
+        try offsets.append(allocator, sheet_end);
+        return offsets.toOwnedSlice(allocator);
+    }
+
+    const prefix = "<row r=\"";
+    var scan = sheet_start;
+    while (scan < sheet_end) {
+        const rel = std.mem.indexOf(u8, raw[scan..sheet_end], prefix) orelse break;
+        const row_start = scan + rel;
+        const number_start = row_start + prefix.len;
+        const number_end_rel = std.mem.indexOfScalar(u8, raw[number_start..sheet_end], '"') orelse break;
+        const number_end = number_start + number_end_rel;
+        const row_number = std.fmt.parseInt(u32, raw[number_start..number_end], 10) catch {
+            scan = number_end + 1;
+            continue;
+        };
+        if (row_number > 1 and (row_number - 1) % row_chunk == 0) {
+            try offsets.append(allocator, row_start);
+        }
+        scan = number_end + 1;
+    }
+
+    try offsets.append(allocator, sheet_end);
+    return offsets.toOwnedSlice(allocator);
+}
+
+fn encodeWithFlushOffsets(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: dfp.encoder.LZ77Params,
+    mode: dfp.encoder.TokenizationMode,
+    flush_offsets: []const usize,
+) ![]u8 {
+    return dfp.encoder.encodeConfiguredDeflate(allocator, raw, .{
+        .params = params,
+        .mem_level = 7,
+        .sync_flush_offsets = flush_offsets,
+        .sync_flush_empty_stored_blocks = 2,
+        .final_flush_empty_stored_blocks = 1,
+        .tokenization_mode = mode,
+    });
+}
+
+fn encodeWorksheetCandidate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: dfp.encoder.LZ77Params,
+    mode: dfp.encoder.TokenizationMode,
+) ![]u8 {
+    const flushes = worksheetFlushOffsets(raw);
+    return encodeWithFlushOffsets(allocator, raw, params, mode, flushes.offsets[0..flushes.len]);
+}
+
+fn encodeWorksheetRowChunkCandidate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: dfp.encoder.LZ77Params,
+    row_chunk: u32,
+) ![]u8 {
+    const flushes = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    defer allocator.free(flushes);
+    return encodeWithFlushOffsets(allocator, raw, params, .segmented, flushes);
+}
+
 fn reportCandidate(
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -327,20 +418,20 @@ pub fn main(init: std.process.Init) !void {
     var target_reader = target_file.reader(io, &target_buf);
     try target_reader.interface.readSliceAll(target);
 
-    const l2 = try dfp.encoder.encodeExcelWorksheetOPCMem7Level2(allocator, raw);
+    const l2 = try encodeWorksheetCandidate(allocator, raw, dfp.encoder.LZ77_LEVEL_2, .segmented);
     defer allocator.free(l2);
     try reportCandidate(allocator, "excel-worksheet-opc-l2-mem7", l2, target);
 
-    const l3 = try dfp.encoder.encodeExcelWorksheetOPCMem7Level3(allocator, raw);
+    const l3 = try encodeWorksheetCandidate(allocator, raw, dfp.encoder.LZ77_LEVEL_3, .segmented);
     defer allocator.free(l3);
     try reportCandidate(allocator, "excel-worksheet-opc-l3-mem7", l3, target);
 
-    const best_segmented = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, 16, 35, 4);
+    const best_segmented = try encodeWorksheetCandidate(allocator, raw, fastParams(16, 35, 4), .segmented);
     defer allocator.free(best_segmented);
     try reportCandidate(allocator, "best-so-far segmented chain=16 nice=35 insert=4", best_segmented, target);
     try reportTokenDivergence(allocator, "segmented chain=16 nice=35 insert=4", best_segmented, target, raw);
 
-    const best_history = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, 16, 35, 4);
+    const best_history = try encodeWorksheetCandidate(allocator, raw, fastParams(16, 35, 4), .prefix_history);
     defer allocator.free(best_history);
     try reportCandidate(allocator, "best-so-far history chain=16 nice=35 insert=4", best_history, target);
     try reportTokenDivergence(allocator, "history chain=16 nice=35 insert=4", best_history, target, raw);
@@ -352,12 +443,13 @@ pub fn main(init: std.process.Init) !void {
             "custom history"
         else
             "custom segmented";
+        const params = fastParams(candidate.chain, candidate.nice, candidate.insert);
         const custom = if (candidate.row_chunk) |row_chunk|
-            try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsRowChunks(allocator, raw, candidate.chain, candidate.nice, candidate.insert, row_chunk)
+            try encodeWorksheetRowChunkCandidate(allocator, raw, params, row_chunk)
         else if (candidate.history)
-            try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, candidate.chain, candidate.nice, candidate.insert)
+            try encodeWorksheetCandidate(allocator, raw, params, .prefix_history)
         else
-            try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, candidate.chain, candidate.nice, candidate.insert);
+            try encodeWorksheetCandidate(allocator, raw, params, .segmented);
         defer allocator.free(custom);
         std.debug.print("\n", .{});
         try reportCandidate(allocator, label, custom, target);
@@ -384,7 +476,7 @@ pub fn main(init: std.process.Init) !void {
         while (nice <= 40) : (nice += 1) {
             var insert: u16 = 4;
             while (insert <= 8) : (insert += 1) {
-                const got = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, chain, nice, insert);
+                const got = try encodeWorksheetCandidate(allocator, raw, fastParams(chain, nice, insert), .segmented);
                 try reportSweepCandidate(allocator, chain, nice, insert, got, target, target_first_main_end, target_prefix_tokens, target_prefix_end_bit);
                 allocator.free(got);
             }
@@ -398,7 +490,7 @@ pub fn main(init: std.process.Init) !void {
         while (nice <= 40) : (nice += 1) {
             var insert: u16 = 4;
             while (insert <= 8) : (insert += 1) {
-                const got = dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, chain, nice, insert) catch |err| {
+                const got = encodeWorksheetCandidate(allocator, raw, fastParams(chain, nice, insert), .prefix_history) catch |err| {
                     std.debug.print("history chain={d} nice={d} insert={d}: {s}\n", .{ chain, nice, insert, @errorName(err) });
                     continue;
                 };
