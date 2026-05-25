@@ -99,6 +99,10 @@ implementations, harvest embedded DEFLATE streams from real files, classify
 their observed block/flush/token behavior, then promote only byte-exact generic
 reproductions into the fingerprint/config registry.
 
+Corpus data is split into committed public fixtures and gitignored
+local/private corpora. See `docs/CORPUS_WORKFLOW.md` before sampling from a NAS
+or promoting a reproduction fixture.
+
 ## Current CLI
 
 ```bash

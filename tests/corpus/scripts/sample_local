@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Deterministically sample candidate files from a local/NAS tree into the
+# gitignored corpus_local hierarchy.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORPUS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+DEST_ROOT="${DEST_ROOT:-$CORPUS_DIR/corpus_local}"
+
+NAS_ROOT="${NAS_ROOT:-/Volumes/Fileserver}"
+N="${N:-50}"
+SEED="${SEED:-42}"
+FORMAT_FILTER=""
+DRY_RUN=0
+
+usage() {
+	cat <<EOF
+Usage: tests/corpus/scripts/sample_local [options]
+
+Options:
+  --nas-root <path>  Root to sample from (default: /Volumes/Fileserver)
+  --n <int>          Sample N files per format (default: 50)
+  --seed <int>       Deterministic shuffle seed (default: 42)
+  --format <name>    Restrict to one format bucket
+  --dest-root <path>  Destination corpus_local root (default: tests/corpus/corpus_local)
+  --dry-run          Print the first few selected paths without copying
+  -h, --help         Show this help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--nas-root) shift; NAS_ROOT="$1" ;;
+		--n) shift; N="$1" ;;
+		--seed) shift; SEED="$1" ;;
+		--format) shift; FORMAT_FILTER="$1" ;;
+		--dest-root) shift; DEST_ROOT="$1" ;;
+		--dry-run) DRY_RUN=1 ;;
+		-h|--help) usage; exit 0 ;;
+		*) echo "unknown arg: $1" >&2; usage; exit 2 ;;
+	esac
+	shift
+done
+
+if [[ ! -d "$NAS_ROOT" ]]; then
+	echo "FATAL: $NAS_ROOT not mounted" >&2
+	exit 1
+fi
+
+if ! command -v rg >/dev/null 2>&1; then
+	echo "FATAL: ripgrep (rg) not found in PATH" >&2
+	exit 1
+fi
+
+formats=(
+	"zip:*.zip"
+	"docx:*.docx"
+	"xlsx:*.xlsx"
+	"pptx:*.pptx"
+	"epub:*.epub"
+	"jar:*.jar"
+	"war:*.war"
+	"ear:*.ear"
+	"apk:*.apk"
+	"ipa:*.ipa"
+	"whl:*.whl"
+	"xpi:*.xpi"
+	"crx:*.crx"
+	"vsix:*.vsix"
+	"odt:*.odt"
+	"ods:*.ods"
+	"odp:*.odp"
+	"cbz:*.cbz"
+	"pdf:*.pdf"
+	"png:*.png"
+	"gzip:*.gz,*.tgz"
+	"iwork:*.pages,*.numbers,*.key"
+)
+
+sample_format() {
+	local format="$1"
+	local patterns_csv="$2"
+	local dest_dir="$DEST_ROOT/$format/wild"
+	local globs=()
+	local pattern
+
+	IFS=',' read -r -a globs_raw <<< "$patterns_csv"
+	for pattern in "${globs_raw[@]}"; do
+		globs+=("-g" "$pattern")
+	done
+
+	local existing=0
+	if [[ -d "$dest_dir" ]]; then
+		existing=$(find "$dest_dir" -type f 2>/dev/null | wc -l | awk '{print $1}')
+	fi
+	if [[ "$DRY_RUN" -eq 0 && "$existing" -ge "$N" ]]; then
+		echo "$format: already has $existing files; skipping"
+		return 0
+	fi
+
+	local candidates
+	candidates=$(rg --files --no-ignore --no-messages --hidden \
+		"${globs[@]}" --glob '!._*' "$NAS_ROOT" 2>/dev/null \
+		| awk -v seed="$SEED" 'BEGIN{srand(seed)} {print rand() "\t" $0}' \
+		| sort -k1,1n \
+		| cut -f2- \
+		| head -n "$N")
+
+	local count
+	count=$(printf '%s\n' "$candidates" | grep -c . || true)
+	if [[ "$count" -eq 0 ]]; then
+		echo "$format: no candidates"
+		return 0
+	fi
+
+	echo "$format: selected $count files"
+	if [[ "$DRY_RUN" -eq 1 ]]; then
+		printf '%s\n' "$candidates" | head -5 | sed 's/^/  /'
+		return 0
+	fi
+
+	mkdir -p "$dest_dir"
+	while IFS= read -r src; do
+		[[ -n "$src" ]] || continue
+		local base hash
+		base="$(basename "$src")"
+		hash="$(printf '%s' "$src" | shasum -a 256 | cut -c1-8)"
+		cp -p "$src" "$dest_dir/${hash}_${base}" 2>/dev/null \
+			|| echo "WARNING: failed to copy $src" >&2
+	done <<< "$candidates"
+}
+
+for spec in "${formats[@]}"; do
+	format="${spec%%:*}"
+	patterns="${spec#*:}"
+	if [[ -n "$FORMAT_FILTER" && "$FORMAT_FILTER" != "$format" ]]; then
+		continue
+	fi
+	sample_format "$format" "$patterns"
+done
+
+echo "Local corpus root: $DEST_ROOT"
+echo "NOTE: corpus_local is gitignored and may contain sensitive data."

@@ -55,6 +55,7 @@
 
 ## Corpus / Fingerprint Pipeline
 
+- [x] Mirror blar's public-vs-local corpus safety model: committed public fixtures, gitignored local/private NAS samples, and documented promotion rules (2026-05-25 13:10 EDT)
 - [ ] Define a source manifest format for corpus streams: source file path/URL, container type, entry/object path, raw length, compressed length, wrapper/container metadata, known producer, and expected reproduction config/fingerprint if known
 - [ ] Build generator-oracle fixtures for known encoders before reverse-engineering: zlib versions, libdeflate, 7-Zip, miniz, Go flate, .NET DeflateStream, Java `java.util.zip`, Apple/CoreFoundation, Info-ZIP/PKZIP/gzip where practical
 - [ ] For each generator oracle, produce the same seeded input set across all exposed levels/strategies/window/mem settings, then record raw DEFLATE bytes and observed block/flush/token summaries

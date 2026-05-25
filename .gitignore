@@ -25,6 +25,17 @@ inbox/
 # Local benchmark scratch (committed results live in bench/results.jsonl)
 bench/scratch/
 
+# Private/local corpora. These may contain Peter's personal files or absolute
+# paths from local machines/NAS mounts. Commit only curated public fixtures.
+corpus_local/
+corpus_private/
+private-corpus/
+tests/corpus/corpus_local/
+tests/corpus/corpus_private/
+tests/corpus/private/
+tests/corpus/local/
+.dfp-private/
+
 # Personal symlinks to Peter's Obsidian vault (broken for anyone else).
 # Contributors will set up their own agent briefings via this repo's docs.
 AGENTS.md
