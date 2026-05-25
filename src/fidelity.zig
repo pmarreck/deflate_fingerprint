@@ -37,6 +37,19 @@ pub fn compressWithZlib(
     level: c_int,
     strategy: Strategy,
 ) ![]u8 {
+    return compressWithZlibMemLevel(allocator, raw, level, strategy, 8);
+}
+
+/// Compress `raw` with real zlib using an explicit memLevel. This is the
+/// oracle for fingerprinting encoders that keep zlib's match parameters but
+/// change pending-buffer/hash-table sizing.
+pub fn compressWithZlibMemLevel(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    level: c_int,
+    strategy: Strategy,
+    mem_level: c_int,
+) ![]u8 {
     // Worst-case output size per zlib's manual: input + (input>>12) + (input>>14)
     //   + (input>>25) + 13. Add slack for empty-input case.
     const cap: usize = raw.len + (raw.len >> 12) + (raw.len >> 14) + (raw.len >> 25) + 64;
@@ -49,7 +62,7 @@ pub fn compressWithZlib(
         level,
         c.Z_DEFLATED,
         -15, // raw DEFLATE
-        8, // default memLevel
+        mem_level,
         @intFromEnum(strategy),
         c.zlibVersion(),
         @sizeOf(c.z_stream),

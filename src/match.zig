@@ -86,6 +86,16 @@ pub const LZ77_LEVEL_7_FILTERED: LZ77Params = .{ .max_chain_length = 256,  .good
 pub const LZ77_LEVEL_8_FILTERED: LZ77Params = .{ .max_chain_length = 1024, .good_match = 32, .nice_match = 258, .max_lazy_match = 128, .filtered = true };
 pub const LZ77_LEVEL_9_FILTERED: LZ77Params = .{ .max_chain_length = 4096, .good_match = 32, .nice_match = 258, .max_lazy_match = 258, .filtered = true };
 
+/// Return zlib-style LZ77 params adjusted for `memLevel`.
+/// zlib maps memLevel to hash_bits=memLevel+7 and hash_shift=ceil(hash_bits/3).
+pub fn withMemLevel(params: LZ77Params, mem_level: u4) LZ77Params {
+    std.debug.assert(mem_level >= 1 and mem_level <= 9);
+    var adjusted = params;
+    adjusted.hash_bits = @intCast(mem_level + 7);
+    adjusted.hash_shift = @intCast((@as(u16, adjusted.hash_bits) + adjusted.min_match - 1) / adjusted.min_match);
+    return adjusted;
+}
+
 /// zlib's MAX_DIST: the maximum permissible match distance.
 /// = window_size - MIN_LOOKAHEAD, where MIN_LOOKAHEAD = max_match + min_match + 1.
 /// For default params (window=32768, max_match=258, min_match=3):

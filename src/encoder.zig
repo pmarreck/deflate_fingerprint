@@ -51,6 +51,7 @@ pub const LZ77_LEVEL_9_FILTERED = match_mod.LZ77_LEVEL_9_FILTERED;
 pub const lz77Tokenize = match_mod.lz77Tokenize;
 pub const lz77TokenizeSlow = match_mod.lz77TokenizeSlow;
 pub const lz77TokenizeRLE = match_mod.lz77TokenizeRLE;
+pub const withMemLevel = match_mod.withMemLevel;
 
 const blocks = @import("blocks.zig");
 const lengthCode = blocks.lengthCode;
@@ -68,6 +69,9 @@ pub const encodeBlockFromTokensWithDynamic = blocks.encodeBlockFromTokensWithDyn
 const emitBlockFromTokensWithDynamicInto = blocks.emitBlockFromTokensWithDynamicInto;
 const encodeMultiBlock3Way = blocks.encodeMultiBlock3Way;
 const encodeMultiBlock2Way = blocks.encodeMultiBlock2Way;
+const encodeMultiBlock3WayChunked = blocks.encodeMultiBlock3WayChunked;
+const encodeMultiBlock3WayChunkedFromRaw = blocks.encodeMultiBlock3WayChunkedFromRaw;
+const chunkSymbolsForMemLevel = blocks.chunkSymbolsForMemLevel;
 
 /// Encode `raw` as a single DEFLATE block with BFINAL=1, BTYPE=01 (fixed
 /// Huffman tables per RFC 1951 §3.2.6), containing only literal symbols
@@ -659,6 +663,30 @@ pub fn encodeZlibLevel1(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return encodeMultiBlock3Way(allocator, tokens);
 }
 
+fn encodeZlibFastMemLevel(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+) ![]u8 {
+    const adjusted = withMemLevel(params, mem_level);
+    const tokens = try lz77Tokenize(allocator, raw, adjusted);
+    defer allocator.free(tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, chunkSymbolsForMemLevel(mem_level));
+}
+
+pub fn encodeZlibLevel1Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeZlibFastMemLevel(allocator, raw, LZ77_LEVEL_1, 7);
+}
+
+pub fn encodeZlibLevel2Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeZlibFastMemLevel(allocator, raw, LZ77_LEVEL_2, 7);
+}
+
+pub fn encodeZlibLevel3Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeZlibFastMemLevel(allocator, raw, LZ77_LEVEL_3, 7);
+}
+
 // ─── Phase E tests ────────────────────────────────────────────────────────
 
 test "encodeZlibLevel1: no-match cases match the fixed-Huffman literal path" {
@@ -739,6 +767,49 @@ test "encodeZlibLevel1: prose input picks DYNAMIC Huffman like real zlib" {
     const got = try encodeZlibLevel1(testing.allocator, input);
     defer testing.allocator.free(got);
     try testing.expectEqualSlices(u8, &expected, got);
+}
+
+test "encodeZlibLevel1Mem7 matches real zlib with memLevel=7 on multi-block literal-heavy input" {
+    const fidelity = @import("fidelity.zig");
+    const input = try testing.allocator.alloc(u8, 20_000);
+    defer testing.allocator.free(input);
+    var x: u32 = 0x1234_5678;
+    for (input) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+
+    const got = try encodeZlibLevel1Mem7(testing.allocator, input);
+    defer testing.allocator.free(got);
+    const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 1, .default, 7);
+    defer testing.allocator.free(expected);
+    try testing.expectEqualSlices(u8, expected, got);
+}
+
+test "encodeZlibLevel2/3Mem7 match real zlib with memLevel=7 on multi-block input" {
+    const fidelity = @import("fidelity.zig");
+    const input = try testing.allocator.alloc(u8, 20_000);
+    defer testing.allocator.free(input);
+    var x: u32 = 0x8765_4321;
+    for (input) |*b| {
+        x = x *% 1103515245 +% 12345;
+        b.* = @truncate(x >> 23);
+    }
+
+    {
+        const got = try encodeZlibLevel2Mem7(testing.allocator, input);
+        defer testing.allocator.free(got);
+        const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 2, .default, 7);
+        defer testing.allocator.free(expected);
+        try testing.expectEqualSlices(u8, expected, got);
+    }
+    {
+        const got = try encodeZlibLevel3Mem7(testing.allocator, input);
+        defer testing.allocator.free(got);
+        const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 3, .default, 7);
+        defer testing.allocator.free(expected);
+        try testing.expectEqualSlices(u8, expected, got);
+    }
 }
 
 // Token-side dispatchers + emit primitives (encodeBlockFromTokensWithDynamic,

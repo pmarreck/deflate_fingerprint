@@ -389,6 +389,18 @@ pub fn emitBlockFromTokensWithDynamicInto(
     tokens: []const Token,
     bfinal: u1,
 ) !void {
+    const raw = try reconstructFromTokens(allocator, tokens);
+    defer allocator.free(raw);
+    return emitBlockFromTokensWithDynamicIntoRaw(bw, allocator, tokens, raw, bfinal);
+}
+
+pub fn emitBlockFromTokensWithDynamicIntoRaw(
+    bw: *BitWriter,
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    raw: []const u8,
+    bfinal: u1,
+) !void {
     const static_len_bits: u32 = staticTokenBitsCost(tokens) + 7;
     const static_lenb: u32 = (static_len_bits + 3 + 7) >> 3;
 
@@ -402,11 +414,10 @@ pub fn emitBlockFromTokensWithDynamicInto(
     if (static_lenb <= opt_lenb) opt_lenb = static_lenb;
 
     const raw_len: u32 = @intCast(tokenStreamRawLen(tokens));
+    std.debug.assert(raw.len == raw_len);
     const stored_est: u32 = raw_len + 4;
 
     if (stored_est <= opt_lenb) {
-        const raw = try reconstructFromTokens(allocator, tokens);
-        defer allocator.free(raw);
         std.debug.assert(raw.len <= 0xFFFF);
         try emitStoredBlock(bw, raw, bfinal);
         return;
@@ -430,9 +441,24 @@ pub fn emitBlockFromTokensWithDynamicInto(
 /// Symbol-count boundary for multi-block flushes at zlib's default memLevel=8.
 pub const MULTI_BLOCK_CHUNK_SYMBOLS: usize = 16383;
 
+/// zlib's pending literal/match buffer holds `1 << (memLevel + 6)` symbols
+/// and flushes when `last_lit == lit_bufsize - 1`.
+pub fn chunkSymbolsForMemLevel(mem_level: u4) usize {
+    std.debug.assert(mem_level >= 1 and mem_level <= 9);
+    return (@as(usize, 1) << @intCast(mem_level + 6)) - 1;
+}
+
 /// Multi-block driver using the 3-way (STORED/FIXED/DYNAMIC) per-chunk
 /// dispatch. Used by default-strategy / Z_RLE / Z_FILTERED encoders.
 pub fn encodeMultiBlock3Way(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    return encodeMultiBlock3WayChunked(allocator, tokens, MULTI_BLOCK_CHUNK_SYMBOLS);
+}
+
+pub fn encodeMultiBlock3WayChunked(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    chunk_symbols: usize,
+) ![]u8 {
     var bw = BitWriter.init(allocator);
     errdefer bw.deinit();
 
@@ -443,7 +469,7 @@ pub fn encodeMultiBlock3Way(allocator: std.mem.Allocator, tokens: []const Token)
 
     var i: usize = 0;
     while (i < tokens.len) {
-        const end = @min(i + MULTI_BLOCK_CHUNK_SYMBOLS, tokens.len);
+        const end = @min(i + chunk_symbols, tokens.len);
         const is_last: u1 = if (end == tokens.len) 1 else 0;
         try emitBlockFromTokensWithDynamicInto(&bw, allocator, tokens[i..end], is_last);
         i = end;
@@ -451,9 +477,45 @@ pub fn encodeMultiBlock3Way(allocator: std.mem.Allocator, tokens: []const Token)
     return bw.toOwnedSlice();
 }
 
+pub fn encodeMultiBlock3WayChunkedFromRaw(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    raw: []const u8,
+    chunk_symbols: usize,
+) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    if (tokens.len == 0) {
+        try emitFixedHuffmanFromTokensBlock(&bw, tokens, 1);
+        return bw.toOwnedSlice();
+    }
+
+    var i: usize = 0;
+    var raw_pos: usize = 0;
+    while (i < tokens.len) {
+        const end = @min(i + chunk_symbols, tokens.len);
+        const raw_end = raw_pos + tokenStreamRawLen(tokens[i..end]);
+        const is_last: u1 = if (end == tokens.len) 1 else 0;
+        try emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[i..end], raw[raw_pos..raw_end], is_last);
+        raw_pos = raw_end;
+        i = end;
+    }
+    std.debug.assert(raw_pos == raw.len);
+    return bw.toOwnedSlice();
+}
+
 /// Multi-block driver using the 2-way (STORED/FIXED) per-chunk dispatch.
 /// Used by Z_FIXED-strategy encoders.
 pub fn encodeMultiBlock2Way(allocator: std.mem.Allocator, tokens: []const Token) ![]u8 {
+    return encodeMultiBlock2WayChunked(allocator, tokens, MULTI_BLOCK_CHUNK_SYMBOLS);
+}
+
+pub fn encodeMultiBlock2WayChunked(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    chunk_symbols: usize,
+) ![]u8 {
     var bw = BitWriter.init(allocator);
     errdefer bw.deinit();
 
@@ -464,7 +526,7 @@ pub fn encodeMultiBlock2Way(allocator: std.mem.Allocator, tokens: []const Token)
 
     var i: usize = 0;
     while (i < tokens.len) {
-        const end = @min(i + MULTI_BLOCK_CHUNK_SYMBOLS, tokens.len);
+        const end = @min(i + chunk_symbols, tokens.len);
         const is_last: u1 = if (end == tokens.len) 1 else 0;
         try emitBlockFromTokensInto(&bw, allocator, tokens[i..end], is_last);
         i = end;

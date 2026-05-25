@@ -99,13 +99,21 @@ standard zlib L1.
 
 ## New evidence from current Codex session (2026-05-25)
 
-Added `src/inspect.zig` and `tools/deflate_block_inspect.zig`:
+Added `src/inspect.zig`, `tools/deflate_block_inspect.zig`, and memLevel=7
+zlib encoder paths:
 - `inspectBlocks()` now parses raw RFC 1951 block boundaries for STORED,
   FIXED, and DYNAMIC blocks, including dynamic tree-of-trees and LZ77
   length/distance accounting.
 - `deflate-block-inspect` prints block type, compressed bit range, raw byte
   range, and token count for a raw-DEFLATE file.
-- Full suite is now 100/100 green.
+- `encodeZlibLevel1Mem7`, `encodeZlibLevel2Mem7`, and `encodeZlibLevel3Mem7`
+  are byte-exact against real zlib on multi-block tests. They are not
+  registered fingerprints yet.
+- The block emit path now has raw-slice-aware STORED fallback for chunked
+  streams. This fixes a real bug exposed by memLevel=7: a token chunk can start
+  with a match whose distance points into a previous block, so a block cannot
+  always reconstruct its raw bytes from its local token slice alone.
+- Full suite is now 102/102 green.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
