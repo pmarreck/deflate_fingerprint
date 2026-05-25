@@ -23,5 +23,5 @@ annotate=[
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
 	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE hypotheses, sweeps fast params, and reports token-level divergence.
-	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, and miss block shapes.
+	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, miss block shapes, and optional Excel worksheet candidate coverage.
 ]

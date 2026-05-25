@@ -26,7 +26,9 @@ needs byte-identical reconstruction of embedded compressed streams).
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
   reports per-fingerprint hits, and in verbose mode prints OOXML producer
   metadata plus compact block summaries for misses. Build via
-  `nix develop -c zig build probe-install`.
+  `nix develop -c zig build probe-install`. Use `--excel-experimental` to
+  count the current unregistered worksheet candidate against worksheet XML
+  entries.
 - `tools/excel_candidate_probe.zig` compares worksheet-specific candidate
   encoders against a raw worksheet and target DEFLATE stream. Build/run via
   `nix develop -c zig build excel-probe -- RAW TARGET [--sweep]`.
@@ -198,6 +200,13 @@ Updated hypothesis:
   `/tmp/dfp_excel_probe/sheet2_comp.bin` byte-exact (`50,183` bytes) from
   `/tmp/dfp_excel_probe/sheet2_orig.bin`. Its token stream is identical to the
   target. Prefix-history mode with the same params is not exact.
+- `zip-corpus-probe --excel-experimental /tmp/dfp_xlsx_probe_dir --verbose`
+  currently reports 3/8 worksheet XML entries exact for this candidate:
+  CPI `sheet1.xml`, `sheet2.xml`, and `sheet4.xml`. CPI `sheet3.xml`,
+  `sheet5.xml`, and `sheet6.xml` are not exact (`first_diff` 657, 968, and 2).
+  LibreOffice `scorely` and Excel 14 sample worksheet entries are not exact.
+  This supports Peter's concern: Office worksheet behavior should be clustered
+  by byte-reproduction behavior, not labeled as one universal Excel encoder.
 
 ## Producer/version variance concern (Peter, 2026-05-25)
 

@@ -33,6 +33,12 @@ pub fn parseAppMetadata(xml: []const u8) AppMetadata {
     };
 }
 
+/// Classify OOXML worksheet XML entries for Excel-family DEFLATE probes.
+/// This keeps worksheet-specific hypotheses away from workbook/shared XML.
+pub fn isWorksheetPath(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "xl/worksheets/") and std.mem.endsWith(u8, path, ".xml");
+}
+
 const testing = std.testing;
 
 test "parseAppMetadata extracts Microsoft Excel producer fields" {
@@ -51,4 +57,22 @@ test "parseAppMetadata tolerates missing fields" {
     const meta = parseAppMetadata("<Properties><Application>LibreOffice</Application></Properties>");
     try testing.expectEqualStrings("LibreOffice", meta.application.?);
     try testing.expectEqual(null, meta.app_version);
+}
+
+test "isWorksheetPath classifies only OOXML worksheet XML entries" {
+    const positives = [_][]const u8{
+        "xl/worksheets/sheet1.xml",
+        "xl/worksheets/sheet42.xml",
+        "xl/worksheets/_rels/sheet1.xml",
+    };
+    const negatives = [_][]const u8{
+        "xl/workbook.xml",
+        "xl/sharedStrings.xml",
+        "xl/worksheets/sheet1.xml.rels",
+        "word/worksheets/sheet1.xml",
+        "xl/worksheets/sheet1.bin",
+    };
+
+    for (positives) |path| try testing.expect(isWorksheetPath(path));
+    for (negatives) |path| try testing.expect(!isWorksheetPath(path));
 }

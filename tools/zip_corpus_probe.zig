@@ -38,6 +38,8 @@ const Stats = struct {
     entries_inflate_failed: usize = 0,
     entries_identified: usize = 0,
     entries_missed: usize = 0,
+    excel_experimental_attempted: usize = 0,
+    excel_experimental_exact: usize = 0,
     hits_per_fp: [256]usize = [_]usize{0} ** 256,
 
     fn print(self: Stats, writer: anytype) !void {
@@ -51,6 +53,11 @@ const Stats = struct {
         try writer.print("    inflate failed: {d}\n", .{self.entries_inflate_failed});
         try writer.print("    identified:     {d}\n", .{self.entries_identified});
         try writer.print("    missed:         {d}\n", .{self.entries_missed});
+        if (self.excel_experimental_attempted != 0) {
+            try writer.print("\nExperimental Excel worksheet candidate:\n", .{});
+            try writer.print("  attempted:        {d}\n", .{self.excel_experimental_attempted});
+            try writer.print("  byte-exact:       {d}\n", .{self.excel_experimental_exact});
+        }
         if (self.entries_deflate > 0) {
             const attempted = self.entries_deflate - self.entries_inflate_failed;
             if (attempted > 0) {
@@ -82,6 +89,15 @@ fn readU32LE(buf: []const u8, off: usize) u32 {
         (@as(u32, buf[off + 1]) << 8) |
         (@as(u32, buf[off + 2]) << 16) |
         (@as(u32, buf[off + 3]) << 24);
+}
+
+fn firstDiff(a: []const u8, b: []const u8) usize {
+    const n = @min(a.len, b.len);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (a[i] != b[i]) return i;
+    }
+    return n;
 }
 
 /// Scan backwards from the end of `buf` to find the EOCD signature.
@@ -174,6 +190,7 @@ fn processArchive(
     buf: []const u8,
     stats: *Stats,
     verbose: bool,
+    excel_experimental: bool,
 ) !void {
     const eocd_off = findEOCD(buf) orelse return error.NoEOCD;
     if (eocd_off + 22 > buf.len) return error.TruncatedEOCD;
@@ -224,11 +241,13 @@ fn processArchive(
             try processDeflateEntry(
                 allocator,
                 buf,
+                name,
                 lfh_off,
                 compressed_size,
                 uncompressed_size,
                 stats,
                 verbose,
+                excel_experimental,
             );
         } else {
             stats.entries_other_method += 1;
@@ -241,11 +260,13 @@ fn processArchive(
 fn processDeflateEntry(
     allocator: std.mem.Allocator,
     buf: []const u8,
+    entry_name: []const u8,
     lfh_off: u32,
     compressed_size: u32,
     uncompressed_size: u32,
     stats: *Stats,
     verbose: bool,
+    excel_experimental: bool,
 ) !void {
     // Skip ZIP64 / streaming-descriptor sentinels.
     if (compressed_size == 0xFFFFFFFF or uncompressed_size == 0xFFFFFFFF) return;
@@ -266,6 +287,21 @@ fn processDeflateEntry(
     };
     defer allocator.free(original);
 
+    var excel_experimental_exact = false;
+    var excel_experimental_len: usize = 0;
+    var excel_experimental_first_diff: usize = 0;
+    if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
+        stats.excel_experimental_attempted += 1;
+        const got = dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, original, 16, 35, 4) catch null;
+        if (got) |candidate| {
+            defer allocator.free(candidate);
+            excel_experimental_len = candidate.len;
+            excel_experimental_first_diff = firstDiff(candidate, compressed);
+            excel_experimental_exact = std.mem.eql(u8, candidate, compressed);
+            if (excel_experimental_exact) stats.excel_experimental_exact += 1;
+        }
+    }
+
     // Identify.
     const result = dfp.identify(allocator, original, compressed) catch {
         stats.entries_missed += 1;
@@ -277,16 +313,32 @@ fn processDeflateEntry(
             stats.hits_per_fp[result.fingerprint_id] += 1;
         }
         if (verbose) {
-            std.debug.print("    hit  #{d} ({d}B in, {d}B compressed)\n", .{
-                result.fingerprint_id, original.len, compressed.len,
+            std.debug.print("    hit  #{d} {s} ({d}B in, {d}B compressed", .{
+                result.fingerprint_id, entry_name, original.len, compressed.len,
             });
+            if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
+                std.debug.print(", excel-experimental={} len={d} first_diff={d}", .{
+                    excel_experimental_exact,
+                    excel_experimental_len,
+                    excel_experimental_first_diff,
+                });
+            }
+            std.debug.print(")\n", .{});
         }
     } else {
         stats.entries_missed += 1;
         if (verbose) {
-            std.debug.print("    miss ({d}B in, {d}B compressed)\n", .{
-                original.len, compressed.len,
+            std.debug.print("    miss {s} ({d}B in, {d}B compressed", .{
+                entry_name, original.len, compressed.len,
             });
+            if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
+                std.debug.print(", excel-experimental={} len={d} first_diff={d}", .{
+                    excel_experimental_exact,
+                    excel_experimental_len,
+                    excel_experimental_first_diff,
+                });
+            }
+            std.debug.print(")\n", .{});
             printBlockSummary(allocator, compressed);
         }
     }
@@ -296,6 +348,7 @@ const Args = struct {
     dir: []const u8,
     verbose: bool = false,
     limit: ?usize = null,
+    excel_experimental: bool = false,
 };
 
 fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
@@ -306,10 +359,13 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
     var dir: ?[]const u8 = null;
     var verbose = false;
     var limit: ?usize = null;
+    var excel_experimental = false;
 
     while (it.next()) |a| {
         if (std.mem.eql(u8, a, "--verbose") or std.mem.eql(u8, a, "-v")) {
             verbose = true;
+        } else if (std.mem.eql(u8, a, "--excel-experimental")) {
+            excel_experimental = true;
         } else if (std.mem.startsWith(u8, a, "--limit=")) {
             limit = try std.fmt.parseInt(usize, a["--limit=".len..], 10);
         } else if (std.mem.eql(u8, a, "--limit")) {
@@ -319,7 +375,7 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
             std.debug.print(
                 \\zip-corpus-probe: identify raw-DEFLATE streams in real ZIP archives.
                 \\
-                \\Usage: zip-corpus-probe <dir> [--verbose] [--limit N]
+                \\Usage: zip-corpus-probe <dir> [--verbose] [--limit N] [--excel-experimental]
                 \\
                 \\Walks <dir> recursively, processes every .zip/.docx/.jar/.epub/.odt/
                 \\.xlsx/.pptx file found, parses each archive's central directory,
@@ -327,6 +383,10 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
                 \\
                 \\Reports aggregate stats: how many streams were identified by which
                 \\fingerprint, how many were missed, etc.
+                \\
+                \\--excel-experimental additionally tests the current unregistered
+                \\Excel worksheet hypothesis: memLevel=7, chain=16, nice=35,
+                \\insert=4, segmented at sheetData sync-flush boundaries.
                 \\
                 \\
             , .{});
@@ -340,10 +400,10 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
     }
 
     if (dir == null) {
-        std.debug.print("usage: zip-corpus-probe <dir> [--verbose] [--limit N]\n", .{});
+        std.debug.print("usage: zip-corpus-probe <dir> [--verbose] [--limit N] [--excel-experimental]\n", .{});
         std.process.exit(2);
     }
-    return .{ .dir = dir.?, .verbose = verbose, .limit = limit };
+    return .{ .dir = dir.?, .verbose = verbose, .limit = limit, .excel_experimental = excel_experimental };
 }
 
 fn isZipExtension(name: []const u8) bool {
@@ -415,7 +475,7 @@ pub fn main(init: std.process.Init) !void {
         stats.files_scanned += 1;
         if (args.verbose) std.debug.print("[{d}] {s} ({d}B)\n", .{ stats.files_scanned, path_dup, sz });
 
-        processArchive(allocator, path_dup, buf, &stats, args.verbose) catch |err| {
+        processArchive(allocator, path_dup, buf, &stats, args.verbose, args.excel_experimental) catch |err| {
             std.debug.print("  parse error in {s}: {s}\n", .{ path_dup, @errorName(err) });
             stats.files_failed_parse += 1;
         };
