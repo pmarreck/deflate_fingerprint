@@ -21,7 +21,7 @@ needs byte-identical reconstruction of embedded compressed streams).
   - Fileserver Books / 100 ePubs (13,761):  73.4%
   - Fileserver Downloads (6,091):           85.7%
   - Fileserver Documents / 2 .xlsx (516):   66.1% with fingerprint #28
-- 112 full-suite tests green; current module architecture includes
+- 114 full-suite tests green; current module architecture includes
   bitstream/huffman/match/blocks/encoder/fidelity/inspect/ooxml/lib.
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
   reports per-fingerprint hits, and in verbose mode prints OOXML producer
@@ -123,8 +123,9 @@ zlib encoder paths:
   chunk beginning with a match whose distance reaches into the previous chunk.
 - The registered v0.1 flush/finish wrapper now uses raw-slice-aware chunk emission too; this is pinned
   by a small cross-chunk-match regression test.
-- Full suite is now 112/112 green after moving worksheet-specific core tests
-  into generic configuration coverage and adding C FFI config coverage.
+- Full suite is now 114/114 green after moving worksheet-specific core tests
+  into generic configuration coverage, adding C FFI config coverage, and
+  adding target-derived flush schedule coverage.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
@@ -222,8 +223,11 @@ Updated hypothesis:
 Current abstraction boundary:
 - Core encoder code is producer-agnostic. New reproduction behavior should be
   represented as `DeflateReproductionConfig` values: LZ77 params, memLevel,
-  tokenization mode, raw `sync_flush_offsets`, flush marker counts, and finish
-  mode.
+  tokenization mode, `FlushEvent` schedules, final flush count, and finish mode.
+- `inspect.observeFlushSchedule()` derives the sync-flush topology from the
+  target DEFLATE stream itself by grouping consecutive empty STORED blocks at
+  the same raw offset. This is deterministic and does not need AI or
+  producer/container naming.
 - The C FFI now exposes the same abstraction as `dfp_encode_configured()` using
   `dfp_deflate_config_t`, so non-Zig callers can reproduce config-discovered
   streams without depending on a registry ID.
@@ -275,6 +279,15 @@ Current probe check:
 - CPI workbook remains mostly missed: small entries hit fingerprint #28, while
   large worksheet streams miss with memLevel=7-like block cadence and explicit
   empty stored flush markers.
+- `zip-corpus-probe --excel-experimental /tmp/dfp_xlsx_probe_dir --verbose`
+  now uses target-derived observed flush schedules first and reports 7/8
+  worksheet entries exact:
+  - CPI sheets 1/2/4: `observed-nice35`
+  - CPI sheets 3/6: `observed-nice48`
+  - CPI sheet5: `observed-nice60`
+  - Excel 14 sample sheet1: `observed-l1-mem7`
+  - LibreOffice scorely sheet1: not an experimental worksheet match because
+    it is plain registered zlib L6 (`#4`) with no explicit flush/finish shape.
 
 ## Outstanding gaps to close
 
@@ -309,6 +322,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 112/112 green.
+3. Run `./test` — should be 114/114 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

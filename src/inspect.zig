@@ -25,6 +25,21 @@ pub const BlockInfo = struct {
     token_count: usize,
 };
 
+pub const ObservedFlushEvent = struct {
+    raw_offset: usize,
+    empty_stored_blocks: usize,
+};
+
+pub const ObservedFlushSchedule = struct {
+    sync_flushes: []ObservedFlushEvent,
+    final_flush_empty_stored_blocks: usize,
+    has_empty_fixed_finish: bool,
+
+    pub fn deinit(self: ObservedFlushSchedule, allocator: std.mem.Allocator) void {
+        allocator.free(self.sync_flushes);
+    }
+};
+
 pub const MatchToken = struct {
     length: u16,
     distance: u16,
@@ -419,6 +434,59 @@ pub fn inspectBlocks(allocator: std.mem.Allocator, deflate: []const u8) ![]Block
     return blocks.toOwnedSlice(allocator);
 }
 
+/// Infer explicit flush topology from a target DEFLATE stream by grouping
+/// consecutive empty STORED blocks at the same raw offset. This produces
+/// deterministic config data; producer/container names are not involved.
+pub fn observeFlushSchedule(allocator: std.mem.Allocator, deflate: []const u8) !ObservedFlushSchedule {
+    const blocks = try inspectBlocks(allocator, deflate);
+    defer allocator.free(blocks);
+
+    var sync_flushes: std.ArrayList(ObservedFlushEvent) = .empty;
+    errdefer sync_flushes.deinit(allocator);
+
+    const final_raw = if (blocks.len == 0) 0 else blocks[blocks.len - 1].raw_end;
+    var final_flush_empty_stored_blocks: usize = 0;
+    var has_empty_fixed_finish = false;
+
+    var i: usize = 0;
+    while (i < blocks.len) {
+        const block = blocks[i];
+        if (block.block_type == .fixed and block.raw_start == block.raw_end and block.token_count == 0 and block.bfinal) {
+            has_empty_fixed_finish = true;
+        }
+        if (block.block_type != .stored or block.raw_start != block.raw_end) {
+            i += 1;
+            continue;
+        }
+
+        const raw_offset = block.raw_start;
+        var count: usize = 0;
+        while (i < blocks.len and
+            blocks[i].block_type == .stored and
+            blocks[i].raw_start == raw_offset and
+            blocks[i].raw_end == raw_offset)
+        {
+            count += 1;
+            i += 1;
+        }
+
+        if (raw_offset == final_raw) {
+            final_flush_empty_stored_blocks += count;
+        } else {
+            try sync_flushes.append(allocator, .{
+                .raw_offset = raw_offset,
+                .empty_stored_blocks = count,
+            });
+        }
+    }
+
+    return .{
+        .sync_flushes = try sync_flushes.toOwnedSlice(allocator),
+        .final_flush_empty_stored_blocks = final_flush_empty_stored_blocks,
+        .has_empty_fixed_finish = has_empty_fixed_finish,
+    };
+}
+
 /// Decode raw RFC 1951 DEFLATE into a flat literal/match trace for forensics.
 /// This exposes LZ77 decisions so candidate encoders can be diffed by token.
 pub fn inspectTokens(allocator: std.mem.Allocator, deflate: []const u8) ![]TokenTraceItem {
@@ -585,4 +653,30 @@ test "inspectTokens emits dynamic-Huffman match length and distance" {
     try testing.expectEqual(@as(usize, 12), tokens[4].raw_end);
     try testing.expectEqual(@as(u16, 8), tokens[4].token.match.length);
     try testing.expectEqual(@as(u16, 3), tokens[4].token.match.distance);
+}
+
+test "observeFlushSchedule groups internal and final empty stored blocks" {
+    const raw = "alpha beta gamma";
+    const flushes = [_]encoder.FlushEvent{
+        .{ .raw_offset = 6, .empty_stored_blocks = 2 },
+        .{ .raw_offset = 11, .empty_stored_blocks = 1 },
+    };
+    const deflated = try encoder.encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = encoder.LZ77_LEVEL_1,
+        .mem_level = 7,
+        .sync_flushes = &flushes,
+        .final_flush_empty_stored_blocks = 1,
+    });
+    defer testing.allocator.free(deflated);
+
+    const observed = try observeFlushSchedule(testing.allocator, deflated);
+    defer observed.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), observed.sync_flushes.len);
+    try testing.expectEqual(@as(usize, 6), observed.sync_flushes[0].raw_offset);
+    try testing.expectEqual(@as(usize, 2), observed.sync_flushes[0].empty_stored_blocks);
+    try testing.expectEqual(@as(usize, 11), observed.sync_flushes[1].raw_offset);
+    try testing.expectEqual(@as(usize, 1), observed.sync_flushes[1].empty_stored_blocks);
+    try testing.expectEqual(@as(usize, 1), observed.final_flush_empty_stored_blocks);
+    try testing.expectEqual(true, observed.has_empty_fixed_finish);
 }

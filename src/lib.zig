@@ -238,9 +238,8 @@ const CDeflateConfig = extern struct {
     filtered: u8,
     _pad: [7]u8 = .{0} ** 7,
     window_size: usize,
-    sync_flush_offsets: ?[*]const usize,
-    sync_flush_offsets_len: usize,
-    sync_flush_empty_stored_blocks: usize,
+    sync_flushes: ?[*]const encoder.FlushEvent,
+    sync_flushes_len: usize,
     final_flush_empty_stored_blocks: usize,
 };
 
@@ -259,10 +258,10 @@ fn configFromC(c: *const CDeflateConfig) !encoder.DeflateReproductionConfig {
         C_FINISH_EMPTY_FIXED_BLOCK => .empty_fixed_block,
         else => return error.InvalidConfig,
     };
-    const flush_offsets = if (c.sync_flush_offsets_len == 0)
-        &[_]usize{}
-    else if (c.sync_flush_offsets) |ptr|
-        ptr[0..c.sync_flush_offsets_len]
+    const sync_flushes = if (c.sync_flushes_len == 0)
+        &[_]encoder.FlushEvent{}
+    else if (c.sync_flushes) |ptr|
+        ptr[0..c.sync_flushes_len]
     else
         return error.InvalidConfig;
 
@@ -278,8 +277,7 @@ fn configFromC(c: *const CDeflateConfig) !encoder.DeflateReproductionConfig {
             .filtered = c.filtered != 0,
         },
         .mem_level = mem_level,
-        .sync_flush_offsets = flush_offsets,
-        .sync_flush_empty_stored_blocks = c.sync_flush_empty_stored_blocks,
+        .sync_flushes = sync_flushes,
         .final_flush_empty_stored_blocks = c.final_flush_empty_stored_blocks,
         .finish_mode = finish,
         .tokenization_mode = mode,
@@ -418,7 +416,7 @@ test "dfp_encode: unknown fingerprint_id returns -2" {
 
 test "dfp_encode_configured: raw-offset flushes are exposed through C FFI" {
     const raw = "alpha beta alpha beta";
-    const flushes = [_]usize{6};
+    const flushes = [_]encoder.FlushEvent{.{ .raw_offset = 6, .empty_stored_blocks = 2 }};
     const config: CDeflateConfig = .{
         .max_chain_length = 4,
         .good_match = 4,
@@ -431,9 +429,8 @@ test "dfp_encode_configured: raw-offset flushes are exposed through C FFI" {
         .finish_mode = C_FINISH_EMPTY_FIXED_BLOCK,
         .filtered = 0,
         .window_size = 32768,
-        .sync_flush_offsets = &flushes,
-        .sync_flush_offsets_len = flushes.len,
-        .sync_flush_empty_stored_blocks = 2,
+        .sync_flushes = &flushes,
+        .sync_flushes_len = flushes.len,
         .final_flush_empty_stored_blocks = 1,
     };
 
@@ -450,7 +447,7 @@ test "dfp_encode_configured: raw-offset flushes are exposed through C FFI" {
     var final_flushes: usize = 0;
     for (blocks_seen) |block| {
         if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
-        if (block.raw_start == flushes[0]) configured_flushes += 1;
+        if (block.raw_start == flushes[0].raw_offset) configured_flushes += 1;
         if (block.raw_start == raw.len) final_flushes += 1;
     }
 

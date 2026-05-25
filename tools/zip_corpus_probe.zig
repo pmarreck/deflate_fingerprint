@@ -43,6 +43,7 @@ const Stats = struct {
     excel_experimental_exact_nice35: usize = 0,
     excel_experimental_exact_nice60: usize = 0,
     excel_experimental_exact_row1024: usize = 0,
+    excel_experimental_exact_observed: usize = 0,
     hits_per_fp: [256]usize = [_]usize{0} ** 256,
 
     fn print(self: Stats, writer: anytype) !void {
@@ -63,6 +64,7 @@ const Stats = struct {
             try writer.print("  nice=35 exact:    {d}\n", .{self.excel_experimental_exact_nice35});
             try writer.print("  nice=60 exact:    {d}\n", .{self.excel_experimental_exact_nice60});
             try writer.print("  row1024 exact:    {d}\n", .{self.excel_experimental_exact_row1024});
+            try writer.print("  observed exact:   {d}\n", .{self.excel_experimental_exact_observed});
         }
         if (self.entries_deflate > 0) {
             const attempted = self.entries_deflate - self.entries_inflate_failed;
@@ -115,6 +117,21 @@ fn fastParams(nice_match: u16) dfp.encoder.LZ77Params {
     };
 }
 
+fn observedFlushEvents(
+    allocator: std.mem.Allocator,
+    observed: dfp.inspect.ObservedFlushSchedule,
+) ![]dfp.encoder.FlushEvent {
+    const flushes = try allocator.alloc(dfp.encoder.FlushEvent, observed.sync_flushes.len);
+    errdefer allocator.free(flushes);
+    for (observed.sync_flushes, 0..) |flush, i| {
+        flushes[i] = .{
+            .raw_offset = flush.raw_offset,
+            .empty_stored_blocks = flush.empty_stored_blocks,
+        };
+    }
+    return flushes;
+}
+
 fn worksheetFlushOffsets(raw: []const u8) struct { offsets: [2]usize, len: usize } {
     const sheet_start = std.mem.indexOf(u8, raw, "<sheetData") orelse return .{ .offsets = undefined, .len = 0 };
     const sheet_end_start = std.mem.indexOf(u8, raw, "</sheetData>") orelse return .{ .offsets = undefined, .len = 0 };
@@ -159,21 +176,26 @@ fn encodeConfiguredCandidate(
     allocator: std.mem.Allocator,
     raw: []const u8,
     params: dfp.encoder.LZ77Params,
-    flush_offsets: []const usize,
+    mem_level: u4,
+    flushes: []const dfp.encoder.FlushEvent,
+    final_flush_empty_stored_blocks: usize,
 ) ![]u8 {
     return dfp.encoder.encodeConfiguredDeflate(allocator, raw, .{
         .params = params,
-        .mem_level = 7,
-        .sync_flush_offsets = flush_offsets,
-        .sync_flush_empty_stored_blocks = 2,
-        .final_flush_empty_stored_blocks = 1,
+        .mem_level = mem_level,
+        .sync_flushes = flushes,
+        .final_flush_empty_stored_blocks = final_flush_empty_stored_blocks,
         .tokenization_mode = .segmented,
     });
 }
 
 fn encodeWorksheetCandidate(allocator: std.mem.Allocator, raw: []const u8, nice_match: u16) ![]u8 {
     const flushes = worksheetFlushOffsets(raw);
-    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), flushes.offsets[0..flushes.len]);
+    var events_buf: [2]dfp.encoder.FlushEvent = undefined;
+    for (flushes.offsets[0..flushes.len], 0..) |offset, i| {
+        events_buf[i] = .{ .raw_offset = offset, .empty_stored_blocks = 2 };
+    }
+    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), 7, events_buf[0..flushes.len], 1);
 }
 
 fn encodeWorksheetRowChunkCandidate(
@@ -182,9 +204,14 @@ fn encodeWorksheetRowChunkCandidate(
     nice_match: u16,
     row_chunk: u32,
 ) ![]u8 {
-    const flushes = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    const offsets = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    defer allocator.free(offsets);
+    const flushes = try allocator.alloc(dfp.encoder.FlushEvent, offsets.len);
     defer allocator.free(flushes);
-    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), flushes);
+    for (offsets, 0..) |offset, i| {
+        flushes[i] = .{ .raw_offset = offset, .empty_stored_blocks = 2 };
+    }
+    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), 7, flushes, 1);
 }
 
 /// Scan backwards from the end of `buf` to find the EOCD signature.
@@ -380,15 +407,89 @@ fn processDeflateEntry(
     if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
         stats.excel_experimental_attempted += 1;
 
-        const got35 = encodeWorksheetCandidate(allocator, original, 35) catch null;
-        if (got35) |candidate| {
-            defer allocator.free(candidate);
-            excel_experimental_len = candidate.len;
-            excel_experimental_first_diff = firstDiff(candidate, compressed);
-            if (std.mem.eql(u8, candidate, compressed)) {
-                excel_experimental_label = "nice35";
-                stats.excel_experimental_exact_any += 1;
-                stats.excel_experimental_exact_nice35 += 1;
+        const observed = dfp.inspect.observeFlushSchedule(allocator, compressed) catch null;
+        if (observed) |schedule| {
+            defer schedule.deinit(allocator);
+            if (schedule.has_empty_fixed_finish) {
+                const observed_flushes = observedFlushEvents(allocator, schedule) catch null;
+                if (observed_flushes) |flushes| {
+                    defer allocator.free(flushes);
+
+                    const observed_l1_candidates = [_]struct {
+                        label: []const u8,
+                        mem_level: u4,
+                    }{
+                        .{ .label = "observed-l1-mem8", .mem_level = 8 },
+                        .{ .label = "observed-l1-mem7", .mem_level = 7 },
+                    };
+                    for (observed_l1_candidates) |candidate_spec| {
+                        if (!std.mem.eql(u8, excel_experimental_label, "none")) break;
+                        const got = encodeConfiguredCandidate(
+                            allocator,
+                            original,
+                            dfp.encoder.LZ77_LEVEL_1,
+                            candidate_spec.mem_level,
+                            flushes,
+                            schedule.final_flush_empty_stored_blocks,
+                        ) catch null;
+                        if (got) |candidate| {
+                            defer allocator.free(candidate);
+                            excel_experimental_len = candidate.len;
+                            excel_experimental_first_diff = firstDiff(candidate, compressed);
+                            if (std.mem.eql(u8, candidate, compressed)) {
+                                excel_experimental_label = candidate_spec.label;
+                                stats.excel_experimental_exact_any += 1;
+                                stats.excel_experimental_exact_observed += 1;
+                            }
+                        }
+                    }
+
+                    const observed_candidates = [_]struct {
+                        label: []const u8,
+                        nice: u16,
+                    }{
+                        .{ .label = "observed-nice35", .nice = 35 },
+                        .{ .label = "observed-nice48", .nice = 48 },
+                        .{ .label = "observed-nice60", .nice = 60 },
+                    };
+                    for (observed_candidates) |candidate_spec| {
+                        if (!std.mem.eql(u8, excel_experimental_label, "none")) break;
+                        const got = encodeConfiguredCandidate(
+                            allocator,
+                            original,
+                            fastParams(candidate_spec.nice),
+                            7,
+                            flushes,
+                            schedule.final_flush_empty_stored_blocks,
+                        ) catch null;
+                        if (got) |candidate| {
+                            defer allocator.free(candidate);
+                            excel_experimental_len = candidate.len;
+                            excel_experimental_first_diff = firstDiff(candidate, compressed);
+                            if (std.mem.eql(u8, candidate, compressed)) {
+                                excel_experimental_label = candidate_spec.label;
+                                stats.excel_experimental_exact_any += 1;
+                                stats.excel_experimental_exact_observed += 1;
+                                if (candidate_spec.nice == 35) stats.excel_experimental_exact_nice35 += 1;
+                                if (candidate_spec.nice == 60) stats.excel_experimental_exact_nice60 += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (std.mem.eql(u8, excel_experimental_label, "none")) {
+            const got35 = encodeWorksheetCandidate(allocator, original, 35) catch null;
+            if (got35) |candidate| {
+                defer allocator.free(candidate);
+                excel_experimental_len = candidate.len;
+                excel_experimental_first_diff = firstDiff(candidate, compressed);
+                if (std.mem.eql(u8, candidate, compressed)) {
+                    excel_experimental_label = "nice35";
+                    stats.excel_experimental_exact_any += 1;
+                    stats.excel_experimental_exact_nice35 += 1;
+                }
             }
         }
 

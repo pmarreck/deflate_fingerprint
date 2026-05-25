@@ -72,18 +72,17 @@ fn worksheetRowChunkFlushOffsets(allocator: std.mem.Allocator, raw: []const u8, 
     return offsets.toOwnedSlice(allocator);
 }
 
-fn encodeWithFlushOffsets(
+fn encodeWithFlushEvents(
     allocator: std.mem.Allocator,
     raw: []const u8,
     params: dfp.encoder.LZ77Params,
     mode: dfp.encoder.TokenizationMode,
-    flush_offsets: []const usize,
+    flushes: []const dfp.encoder.FlushEvent,
 ) ![]u8 {
     return dfp.encoder.encodeConfiguredDeflate(allocator, raw, .{
         .params = params,
         .mem_level = 7,
-        .sync_flush_offsets = flush_offsets,
-        .sync_flush_empty_stored_blocks = 2,
+        .sync_flushes = flushes,
         .final_flush_empty_stored_blocks = 1,
         .tokenization_mode = mode,
     });
@@ -96,7 +95,11 @@ fn encodeWorksheetCandidate(
     mode: dfp.encoder.TokenizationMode,
 ) ![]u8 {
     const flushes = worksheetFlushOffsets(raw);
-    return encodeWithFlushOffsets(allocator, raw, params, mode, flushes.offsets[0..flushes.len]);
+    var events_buf: [2]dfp.encoder.FlushEvent = undefined;
+    for (flushes.offsets[0..flushes.len], 0..) |offset, i| {
+        events_buf[i] = .{ .raw_offset = offset, .empty_stored_blocks = 2 };
+    }
+    return encodeWithFlushEvents(allocator, raw, params, mode, events_buf[0..flushes.len]);
 }
 
 fn encodeWorksheetRowChunkCandidate(
@@ -105,9 +108,14 @@ fn encodeWorksheetRowChunkCandidate(
     params: dfp.encoder.LZ77Params,
     row_chunk: u32,
 ) ![]u8 {
-    const flushes = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    const offsets = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    defer allocator.free(offsets);
+    const flushes = try allocator.alloc(dfp.encoder.FlushEvent, offsets.len);
     defer allocator.free(flushes);
-    return encodeWithFlushOffsets(allocator, raw, params, .segmented, flushes);
+    for (offsets, 0..) |offset, i| {
+        flushes[i] = .{ .raw_offset = offset, .empty_stored_blocks = 2 };
+    }
+    return encodeWithFlushEvents(allocator, raw, params, .segmented, flushes);
 }
 
 fn reportCandidate(

@@ -17,7 +17,7 @@ Active reverse-engineering / implementation project.
 - 28 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
   fixed / filtered strategies, collapsed zlib HUFFMAN_ONLY and RLE fingerprints,
   plus zlib L1 explicit `SYNC_FLUSH` + empty finish handling.
-- `./test` currently passes 112 tests: Zig unit tests, CLI integration tests,
+- `./test` currently passes 114 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
@@ -25,8 +25,9 @@ Active reverse-engineering / implementation project.
   recorded in [SESSION_RESUME.md](SESSION_RESUME.md).
 - Active research target: large ZIP-family XML streams with non-default flush
   topology. The core now models these as abstract `DeflateReproductionConfig`
-  values with raw sync-flush offsets; named producer details such as Excel
-  worksheet structure live in probes/tests rather than the main encoder.
+  values with per-offset `FlushEvent` counts derived from the target stream;
+  named producer details such as Excel worksheet structure live in probes/tests
+  rather than the main encoder.
 
 ## Why it exists
 

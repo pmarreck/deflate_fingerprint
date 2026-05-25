@@ -44,6 +44,11 @@ typedef struct {
 /* ── Explicit DEFLATE reproduction config ─────────────────────────────── */
 
 typedef struct {
+    size_t raw_offset;
+    size_t empty_stored_blocks;
+} dfp_flush_event_t;
+
+typedef struct {
     uint32_t max_chain_length;
     uint16_t good_match;
     uint16_t nice_match;
@@ -56,9 +61,8 @@ typedef struct {
     uint8_t  filtered;           /* 0=false, nonzero=true */
     uint8_t  _pad[7];            /* reserved; set to 0 */
     size_t   window_size;
-    const size_t *sync_flush_offsets;
-    size_t   sync_flush_offsets_len;
-    size_t   sync_flush_empty_stored_blocks;
+    const dfp_flush_event_t *sync_flushes;
+    size_t   sync_flushes_len;
     size_t   final_flush_empty_stored_blocks;
 } dfp_deflate_config_t;
 
@@ -100,8 +104,9 @@ int32_t dfp_encode(
 
 /**
  * Encode `raw` using an explicit DEFLATE reproduction config instead of a
- * registry fingerprint. Flush points are raw-byte offsets into `raw`; caller
- * owns the offset array and it only needs to remain valid for this call.
+ * registry fingerprint. Sync flushes are events at raw-byte offsets into
+ * `raw`; caller owns the event array and it only needs to remain valid for
+ * this call.
  *
  * On success, `*out_buf` points to a heap-allocated buffer of size `*out_len`.
  * The caller must free it via `dfp_free`.

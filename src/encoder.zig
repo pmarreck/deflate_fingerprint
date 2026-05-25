@@ -85,11 +85,15 @@ pub const FinishMode = enum {
     empty_fixed_block,
 };
 
+pub const FlushEvent = extern struct {
+    raw_offset: usize,
+    empty_stored_blocks: usize = 1,
+};
+
 pub const DeflateReproductionConfig = struct {
     params: LZ77Params,
     mem_level: u4 = 8,
-    sync_flush_offsets: []const usize = &.{},
-    sync_flush_empty_stored_blocks: usize = 1,
+    sync_flushes: []const FlushEvent = &.{},
     final_flush_empty_stored_blocks: usize = 0,
     /// Currently supported stream terminator: an empty BFINAL=1 fixed-Huffman
     /// block, matching DEFLATE streams that call finish after explicit flushes.
@@ -975,7 +979,7 @@ fn encodeFlushFinishChunked(allocator: std.mem.Allocator, raw: []const u8, chunk
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
     defer allocator.free(tokens);
 
-    return encodeFlushFinishFromTokens(allocator, raw, tokens, chunk_symbols, &.{}, 0, 1);
+    return encodeFlushFinishFromTokens(allocator, raw, tokens, chunk_symbols, &.{}, 1);
 }
 
 fn tokenRawLen(token: Token) usize {
@@ -997,8 +1001,7 @@ fn encodeFlushFinishFromTokens(
     raw: []const u8,
     tokens: []const Token,
     chunk_symbols: usize,
-    flush_offsets: []const usize,
-    internal_flush_count: usize,
+    flushes: []const FlushEvent,
     final_flush_count: usize,
 ) ![]u8 {
     var bw = BitWriter.init(allocator);
@@ -1008,11 +1011,11 @@ fn encodeFlushFinishFromTokens(
     var raw_pos: usize = 0;
     var next_flush_index: usize = 0;
     while (i < tokens.len) {
-        while (next_flush_index < flush_offsets.len and flush_offsets[next_flush_index] <= raw_pos) : (next_flush_index += 1) {
-            if (flush_offsets[next_flush_index] == raw_pos) try writeEmptyStoredBlocks(&bw, internal_flush_count);
+        while (next_flush_index < flushes.len and flushes[next_flush_index].raw_offset <= raw_pos) : (next_flush_index += 1) {
+            if (flushes[next_flush_index].raw_offset == raw_pos) try writeEmptyStoredBlocks(&bw, flushes[next_flush_index].empty_stored_blocks);
         }
 
-        const next_flush = if (next_flush_index < flush_offsets.len) flush_offsets[next_flush_index] else raw.len;
+        const next_flush = if (next_flush_index < flushes.len) flushes[next_flush_index].raw_offset else raw.len;
         const start_i = i;
         const start_raw = raw_pos;
         var symbols: usize = 0;
@@ -1033,8 +1036,8 @@ fn encodeFlushFinishFromTokens(
 
         try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[start_i..i], raw[start_raw..raw_pos], 0);
     }
-    while (next_flush_index < flush_offsets.len) : (next_flush_index += 1) {
-        if (flush_offsets[next_flush_index] == raw_pos) try writeEmptyStoredBlocks(&bw, internal_flush_count);
+    while (next_flush_index < flushes.len) : (next_flush_index += 1) {
+        if (flushes[next_flush_index].raw_offset == raw_pos) try writeEmptyStoredBlocks(&bw, flushes[next_flush_index].empty_stored_blocks);
     }
     std.debug.assert(raw_pos == raw.len);
     // (Empty input: no data blocks emitted; SYNC_FLUSH + FINISH alone produce
@@ -1109,8 +1112,7 @@ fn encodeSegmentedConfiguredDeflate(
     raw: []const u8,
     params: LZ77Params,
     mem_level: u4,
-    flush_offsets: []const usize,
-    internal_flush_count: usize,
+    flushes: []const FlushEvent,
     final_flush_count: usize,
 ) ![]u8 {
     var bw = BitWriter.init(allocator);
@@ -1119,10 +1121,11 @@ fn encodeSegmentedConfiguredDeflate(
     const adjusted = withMemLevel(params, mem_level);
     const chunk_symbols = chunkSymbolsForMemLevel(mem_level);
     var segment_start: usize = 0;
-    for (flush_offsets) |flush_offset| {
+    for (flushes) |flush| {
+        const flush_offset = flush.raw_offset;
         if (flush_offset < segment_start or flush_offset > raw.len) continue;
         try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, chunk_symbols);
-        try writeEmptyStoredBlocks(&bw, internal_flush_count);
+        try writeEmptyStoredBlocks(&bw, flush.empty_stored_blocks);
         segment_start = flush_offset;
     }
 
@@ -1138,8 +1141,7 @@ fn encodePrefixHistoryConfiguredDeflate(
     raw: []const u8,
     params: LZ77Params,
     mem_level: u4,
-    flush_offsets: []const usize,
-    internal_flush_count: usize,
+    flushes: []const FlushEvent,
     final_flush_count: usize,
 ) ![]u8 {
     var bw = BitWriter.init(allocator);
@@ -1148,13 +1150,14 @@ fn encodePrefixHistoryConfiguredDeflate(
     const adjusted = withMemLevel(params, mem_level);
     const chunk_symbols = chunkSymbolsForMemLevel(mem_level);
     var segment_start: usize = 0;
-    for (flush_offsets) |flush_offset| {
+    for (flushes) |flush| {
+        const flush_offset = flush.raw_offset;
         if (flush_offset < segment_start or flush_offset > raw.len) continue;
         emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, flush_offset, adjusted, chunk_symbols) catch |err| switch (err) {
             error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, chunk_symbols),
             else => |e| return e,
         };
-        try writeEmptyStoredBlocks(&bw, internal_flush_count);
+        try writeEmptyStoredBlocks(&bw, flush.empty_stored_blocks);
         segment_start = flush_offset;
     }
 
@@ -1185,8 +1188,7 @@ pub fn encodeConfiguredDeflate(
             raw,
             config.params,
             config.mem_level,
-            config.sync_flush_offsets,
-            config.sync_flush_empty_stored_blocks,
+            config.sync_flushes,
             config.final_flush_empty_stored_blocks,
         ),
         .prefix_history => encodePrefixHistoryConfiguredDeflate(
@@ -1194,8 +1196,7 @@ pub fn encodeConfiguredDeflate(
             raw,
             config.params,
             config.mem_level,
-            config.sync_flush_offsets,
-            config.sync_flush_empty_stored_blocks,
+            config.sync_flushes,
             config.final_flush_empty_stored_blocks,
         ),
     };
@@ -1209,12 +1210,11 @@ test "flush-finish chunking tolerates matches that reference prior chunks" {
 
 test "encodeConfiguredDeflate emits configured raw-offset sync flush markers" {
     const raw = "alpha beta alpha beta";
-    const flushes = [_]usize{6};
+    const flushes = [_]FlushEvent{.{ .raw_offset = 6, .empty_stored_blocks = 2 }};
     const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
         .params = LZ77_LEVEL_1,
         .mem_level = 7,
-        .sync_flush_offsets = &flushes,
-        .sync_flush_empty_stored_blocks = 2,
+        .sync_flushes = &flushes,
         .final_flush_empty_stored_blocks = 1,
         .tokenization_mode = .segmented,
     });
@@ -1227,12 +1227,42 @@ test "encodeConfiguredDeflate emits configured raw-offset sync flush markers" {
     var final_flushes: usize = 0;
     for (blocks_seen) |block| {
         if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
-        if (block.raw_start == flushes[0]) configured_flushes += 1;
+        if (block.raw_start == flushes[0].raw_offset) configured_flushes += 1;
         if (block.raw_start == raw.len) final_flushes += 1;
     }
 
     try testing.expectEqual(@as(usize, 2), configured_flushes);
     try testing.expectEqual(@as(usize, 1), final_flushes);
+}
+
+test "encodeConfiguredDeflate supports per-offset empty stored counts" {
+    const raw = "alpha beta gamma delta";
+    const flushes = [_]FlushEvent{
+        .{ .raw_offset = 6, .empty_stored_blocks = 1 },
+        .{ .raw_offset = 11, .empty_stored_blocks = 3 },
+    };
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .mem_level = 7,
+        .sync_flushes = &flushes,
+        .final_flush_empty_stored_blocks = 0,
+        .tokenization_mode = .segmented,
+    });
+    defer testing.allocator.free(got);
+
+    const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(blocks_seen);
+
+    var first_count: usize = 0;
+    var second_count: usize = 0;
+    for (blocks_seen) |block| {
+        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
+        if (block.raw_start == flushes[0].raw_offset) first_count += 1;
+        if (block.raw_start == flushes[1].raw_offset) second_count += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 1), first_count);
+    try testing.expectEqual(@as(usize, 3), second_count);
 }
 
 // ─── Phase F debug tests ──────────────────────────────────────────────────
