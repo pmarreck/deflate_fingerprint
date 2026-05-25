@@ -94,6 +94,11 @@ implementation:
 - Default path: provide a sensible default encoder config, but keep
   reproduction driven by explicit configuration.
 
+The main research loop is corpus-driven: produce outputs from known encoder
+implementations, harvest embedded DEFLATE streams from real files, classify
+their observed block/flush/token behavior, then promote only byte-exact generic
+reproductions into the fingerprint/config registry.
+
 ## Current CLI
 
 ```bash

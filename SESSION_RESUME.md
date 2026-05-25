@@ -316,6 +316,13 @@ Current probe check:
    `java.util.zip`, Apple/CoreFoundation, and zlib version drift. It is OK to
    add these as development-only `flake.nix` dependencies or platform-SDK
    probes when implementing their corpus generators.
+8. **Corpus/fingerprint workstream**:
+   The main artifact is byte-exact reproducibility. The way to build it is to
+   produce or find as many DEFLATE streams as possible, attach provenance and
+   container metadata, mechanically classify block/flush/token behavior, and
+   promote only byte-exact generic configs into the registry. Near-matches stay
+   as evidence and future work; difz is a downstream residual fallback, not a
+   substitute for finding the real fingerprint.
 
 ## Recent commit log (most recent first)
 

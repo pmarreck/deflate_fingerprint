@@ -53,6 +53,16 @@
 - [ ] Cross-compile for 5 OS/arch combos (Mac aarch64, Linux aarch64/x86_64, Windows aarch64/x86_64)
 - [ ] Initial release v0.1.0
 
+## Corpus / Fingerprint Pipeline
+
+- [ ] Define a source manifest format for corpus streams: source file path/URL, container type, entry/object path, raw length, compressed length, wrapper/container metadata, known producer, and expected reproduction config/fingerprint if known
+- [ ] Build generator-oracle fixtures for known encoders before reverse-engineering: zlib versions, libdeflate, 7-Zip, miniz, Go flate, .NET DeflateStream, Java `java.util.zip`, Apple/CoreFoundation, Info-ZIP/PKZIP/gzip where practical
+- [ ] For each generator oracle, produce the same seeded input set across all exposed levels/strategies/window/mem settings, then record raw DEFLATE bytes and observed block/flush/token summaries
+- [ ] For in-the-wild corpora, extract embedded DEFLATE streams from ZIP-family, PNG, PDF, gzip, iWork, Office, EPUB, APK/JAR/WHL/XPI/VSIX, and public sample files; keep enough surrounding metadata for whole-file round-trip tests
+- [ ] Classify every miss mechanically by observed features: block type sequence, memLevel-like token cadence, flush schedule, first token divergence, Huffman header shape, and compressed-size neighborhood
+- [ ] Promote a behavior to registry/config only when the project can reproduce the stream byte-exactly from raw input and the config is expressed without producer-specific names in core code
+- [ ] Keep near-matches as corpus evidence for future work; do not rely on difz as a substitute for pursuing a real fingerprint unless the stream is genuinely outside the supported model
+
 ## v0.2 — libdeflate + 7-Zip
 
 - [ ] Implement libdeflate-quirks behavior tables (12 levels)
