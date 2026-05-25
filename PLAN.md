@@ -26,6 +26,7 @@
   - **First real-world signal: 70.9% hit rate on ~/Downloads (936 DEFLATE streams across 10 archives).** Fingerprint #4 (L6 default) alone covers 77% of hits — confirms L6 default is the dominant config in the wild. Remaining ~30% misses are mostly an Apple Mac installer (likely Apple's encoder family) plus a few large inputs hitting the L1 divergence.
 - [ ] Implement the detection algorithm (`src/identify.zig`) with early-bailout stream-comparison
 - [ ] Implement registry data file format (`src/registry.zig`)
+- [x] Start pure DEFLATE block-boundary inspector (`src/inspect.zig`) with tested STORED-block range reporting for Excel boundary analysis (2026-05-25 00:00 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports

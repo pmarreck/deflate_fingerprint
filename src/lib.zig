@@ -22,6 +22,7 @@ pub const bitstream = @import("bitstream.zig");
 pub const huffman = @import("huffman.zig");
 pub const match = @import("match.zig");
 pub const blocks = @import("blocks.zig");
+pub const inspect = @import("inspect.zig");
 // Test-time only: real-zlib oracle for byte-exact assertions. Pulls in libz
 // (configured via build.zig) and is referenced from the test block only so
 // it doesn't leak into the shipped library API.
@@ -37,6 +38,7 @@ test {
     _ = huffman;
     _ = match;
     _ = blocks;
+    _ = inspect;
     _ = fidelity;
 }
 
