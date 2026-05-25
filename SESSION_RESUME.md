@@ -97,6 +97,79 @@ Real-zlib L1 default on sheet2_orig.bin gives 53413B — proves our L1 is
 byte-correct after the MAX_DIST fix. So whatever Excel does, it's NOT
 standard zlib L1.
 
+## New evidence from current Codex session (2026-05-25)
+
+Added `src/inspect.zig` and `tools/deflate_block_inspect.zig`:
+- `inspectBlocks()` now parses raw RFC 1951 block boundaries for STORED,
+  FIXED, and DYNAMIC blocks, including dynamic tree-of-trees and LZ77
+  length/distance accounting.
+- `deflate-block-inspect` prints block type, compressed bit range, raw byte
+  range, and token count for a raw-DEFLATE file.
+- Full suite is now 100/100 green.
+
+The original `/tmp/excel_analysis` fixtures were not present, so a similar
+local workbook was probed:
+`/Users/pmarreck/Downloads/CPI2023_Global_Results__Trends.xlsx`,
+entry `xl/worksheets/sheet2.xml`.
+
+Extracted fixtures:
+- `/tmp/dfp_excel_probe/sheet2_orig.bin` — 286,197 bytes
+- `/tmp/dfp_excel_probe/sheet2_comp.bin` — 50,183 bytes
+
+Observed block structure:
+
+```
+idx final type    raw_start raw_end tokens
+0   false dynamic 0         3442    701
+1   false stored  3442      3442    0
+2   false stored  3442      3442    0
+3   false dynamic 3442      88655   8191
+4   false dynamic 88655     180477  8191
+5   false dynamic 180477    274682  8191
+6   false dynamic 274682    285412  954
+7   false stored  285412    285412  0
+8   false stored  285412    285412  0
+9   false dynamic 285412    286197  494
+10  false stored  286197    286197  0
+11  true  fixed   286197    286197  0
+```
+
+Immediate implications:
+- The large worksheet stream uses an 8,191-token block cadence, strongly
+  suggesting zlib `memLevel=7`-style pending buffers (default memLevel=8 gives
+  16,383-token blocks).
+- The stream contains explicit empty STORED blocks mid-stream and at the end,
+  consistent with one or more `Z_SYNC_FLUSH` calls before final finish.
+- It is not just "standard zlib L1 with a different trailer."
+
+Real zlib level/memLevel sweep on the CPI sheet2 raw bytes:
+
+```
+L1 mem7: 55634 bytes
+L2 mem7: 51932 bytes
+L3 mem7: 49058 bytes
+L4 mem7: 46610 bytes
+L5 mem7: 42710 bytes
+L6 mem7: 41045 bytes
+L7 mem7: 40404 bytes
+L8 mem7: 39609 bytes
+L9 mem7: 39609 bytes
+```
+
+CPI sheet2's 50,183 bytes falls between zlib L2 and L3 at memLevel=7. Its
+raw block boundaries after the initial flush are also between L2 and L3:
+- L2 mem7 first main block after a 3442-byte sync flush ended raw at 85,085.
+- CPI ended raw at 88,655.
+- L3 mem7 first main block after a 3442-byte sync flush ended raw at 93,260.
+
+Updated hypothesis:
+- Excel / the producer may be using zlib-compatible `memLevel=7` plus
+  streaming sync flushes, with match parameters between zlib levels 2 and 3,
+  or a non-zlib/Java encoder with similar 8K pending-buffer behavior.
+- Next experiment: simulate level 2/3-ish parameter tables in our encoder or
+  generate reference streams with adjusted zlib config and flush cadence, then
+  compare first divergence/token stream.
+
 ## Outstanding gaps to close
 
 1. **Resolve sheet2 / Excel large-entry mystery** (current focus).

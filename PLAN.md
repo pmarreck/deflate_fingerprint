@@ -29,6 +29,7 @@
 - [x] Start pure DEFLATE block-boundary inspector (`src/inspect.zig`) with tested STORED-block range reporting for Excel boundary analysis (2026-05-25 00:00 EDT)
 - [x] Extend DEFLATE block-boundary inspector to fixed-Huffman literal/match decoding with semantic compressed-end bit reporting before final padding (2026-05-25 00:08 EDT)
 - [x] Extend DEFLATE block-boundary inspector to dynamic-Huffman blocks, including tree-of-trees parsing and LZ77 match range accounting (2026-05-25 00:17 EDT)
+- [x] Add `deflate-block-inspect` dev tool and use it on local CPI `.xlsx` sheet2 stream; observed 8,191-token cadence plus explicit empty stored flush blocks (2026-05-25 00:24 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports

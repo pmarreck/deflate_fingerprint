@@ -82,6 +82,24 @@ pub fn build(b: *std.Build) void {
     const probe_install = b.addInstallArtifact(probe, .{});
     b.step("probe-install", "Install zip-corpus-probe to zig-out/bin").dependOn(&probe_install.step);
 
+    // ─── Raw DEFLATE block inspector (tools/deflate_block_inspect.zig) ────
+    // Dev helper for reverse-engineering block-boundary heuristics.
+    const block_inspect_mod = b.createModule(.{
+        .root_source_file = b.path("tools/deflate_block_inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    block_inspect_mod.addImport("deflate_fingerprint", core_mod);
+    const block_inspect = b.addExecutable(.{
+        .name = "deflate-block-inspect",
+        .root_module = block_inspect_mod,
+    });
+    const block_inspect_run = b.addRunArtifact(block_inspect);
+    if (b.args) |args| block_inspect_run.addArgs(args);
+    b.step("block-inspect", "Inspect raw-DEFLATE block boundaries").dependOn(&block_inspect_run.step);
+    const block_inspect_install = b.addInstallArtifact(block_inspect, .{});
+    b.step("block-inspect-install", "Install deflate-block-inspect to zig-out/bin").dependOn(&block_inspect_install.step);
+
     // ─── Unit tests ──────────────────────────────────────────────────────
     // The test binary links libC + system zlib so tests can `@cImport(zlib.h)`
     // and assert byte-exact equality against real zlib output directly,

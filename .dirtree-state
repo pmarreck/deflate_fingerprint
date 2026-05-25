@@ -19,5 +19,6 @@ annotate=[
 	src/inspect.zig = Pure DEFLATE block inspector; reports block type plus compressed/raw ranges for boundary analysis.
 	src/lib.zig = Public Zig API, inline fingerprint registry, identify/encode dispatch, C FFI exports.
 	src/match.zig = zlib-style LZ77 tokenizers, longestMatch, and zlib MAX_DIST behavior.
+	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
 	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, inflates with libz, identifies fingerprints.
 ]
