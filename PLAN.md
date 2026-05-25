@@ -40,6 +40,7 @@
 - [x] Expose explicit config-driven compression through the C FFI via `dfp_encode_configured`, including `FlushEvent` schedules and LZ77/memLevel/tokenization settings (2026-05-25 11:31 EDT)
 - [x] Generalize sync-flush topology to per-offset `FlushEvent` counts and add deterministic target-derived `observeFlushSchedule()` extraction; local worksheet probe now captures 7/8 worksheet entries exactly, including Excel 14 sample via observed final-flush-only schedule + L1/mem7 (2026-05-25 12:06 EDT)
 - [x] Add core `fingerprintConfigured` API for target-derived generic flush/finish configs and count configured exact hits separately in ZIP corpus probes; private sampled results: xlsx 79.5%, docx 100%, pptx 99.0%, epub 99.4% (2026-05-25 14:20 EDT)
+- [x] Add `zip-corpus-probe --max-streams` and `--progress` so mixed private corpora can be bounded and observable; first 200 mixed local DEFLATE streams: 47.5% exact, mostly zlib #4 hits with many non-OOXML misses (2026-05-25 14:35 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports

@@ -308,6 +308,7 @@ fn processArchive(
     stats: *Stats,
     verbose: bool,
     excel_experimental: bool,
+    max_streams: ?usize,
 ) !void {
     const eocd_off = findEOCD(buf) orelse return error.NoEOCD;
     if (eocd_off + 22 > buf.len) return error.TruncatedEOCD;
@@ -327,6 +328,9 @@ fn processArchive(
     const cd_end: usize = @intCast(@as(usize, cd_off) + @as(usize, cd_size));
 
     while (p < cd_end) {
+        if (max_streams) |lim| {
+            if (stats.entries_deflate >= lim) return;
+        }
         if (p + 46 > buf.len) break;
         if (readU32LE(buf, p) != CDE_SIG) break;
         const method = readU16LE(buf, p + 10);
@@ -595,6 +599,8 @@ const Args = struct {
     dir: []const u8,
     verbose: bool = false,
     limit: ?usize = null,
+    max_streams: ?usize = null,
+    progress_every: ?usize = null,
     excel_experimental: bool = false,
 };
 
@@ -606,6 +612,8 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
     var dir: ?[]const u8 = null;
     var verbose = false;
     var limit: ?usize = null;
+    var max_streams: ?usize = null;
+    var progress_every: ?usize = null;
     var excel_experimental = false;
 
     while (it.next()) |a| {
@@ -618,11 +626,21 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
         } else if (std.mem.eql(u8, a, "--limit")) {
             const v = it.next() orelse return error.MissingLimitValue;
             limit = try std.fmt.parseInt(usize, v, 10);
+        } else if (std.mem.startsWith(u8, a, "--max-streams=")) {
+            max_streams = try std.fmt.parseInt(usize, a["--max-streams=".len..], 10);
+        } else if (std.mem.eql(u8, a, "--max-streams")) {
+            const v = it.next() orelse return error.MissingMaxStreamsValue;
+            max_streams = try std.fmt.parseInt(usize, v, 10);
+        } else if (std.mem.startsWith(u8, a, "--progress=")) {
+            progress_every = try std.fmt.parseInt(usize, a["--progress=".len..], 10);
+        } else if (std.mem.eql(u8, a, "--progress")) {
+            const v = it.next() orelse return error.MissingProgressValue;
+            progress_every = try std.fmt.parseInt(usize, v, 10);
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             std.debug.print(
                 \\zip-corpus-probe: identify raw-DEFLATE streams in real ZIP archives.
                 \\
-                \\Usage: zip-corpus-probe <dir> [--verbose] [--limit N] [--excel-experimental]
+                \\Usage: zip-corpus-probe <dir> [--verbose] [--limit N] [--max-streams N] [--progress N] [--excel-experimental]
                 \\
                 \\Walks <dir> recursively, processes every .zip/.docx/.jar/.epub/.odt/
                 \\.xlsx/.pptx file found, parses each archive's central directory,
@@ -630,6 +648,10 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
                 \\
                 \\Reports aggregate stats: how many streams were identified by which
                 \\fingerprint, how many were missed, etc.
+                \\
+                \\--limit bounds archives scanned. --max-streams bounds DEFLATE entries
+                \\processed across archives. --progress N writes aggregate progress to
+                \\stderr every N archives.
                 \\
                 \\--excel-experimental additionally tests current unregistered
                 \\Excel worksheet hypotheses: memLevel=7, chain=16, insert=4,
@@ -648,10 +670,17 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
     }
 
     if (dir == null) {
-        std.debug.print("usage: zip-corpus-probe <dir> [--verbose] [--limit N] [--excel-experimental]\n", .{});
+        std.debug.print("usage: zip-corpus-probe <dir> [--verbose] [--limit N] [--max-streams N] [--progress N] [--excel-experimental]\n", .{});
         std.process.exit(2);
     }
-    return .{ .dir = dir.?, .verbose = verbose, .limit = limit, .excel_experimental = excel_experimental };
+    return .{
+        .dir = dir.?,
+        .verbose = verbose,
+        .limit = limit,
+        .max_streams = max_streams,
+        .progress_every = progress_every,
+        .excel_experimental = excel_experimental,
+    };
 }
 
 fn isZipExtension(name: []const u8) bool {
@@ -699,6 +728,9 @@ pub fn main(init: std.process.Init) !void {
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!isZipExtension(entry.basename)) continue;
+        if (args.max_streams) |lim| {
+            if (stats.entries_deflate >= lim) break;
+        }
         if (args.limit) |lim| {
             if (stats.files_scanned >= lim) break;
         }
@@ -726,10 +758,25 @@ pub fn main(init: std.process.Init) !void {
         stats.files_scanned += 1;
         if (args.verbose) std.debug.print("[{d}] {s} ({d}B)\n", .{ stats.files_scanned, path_dup, sz });
 
-        processArchive(allocator, path_dup, buf, &stats, args.verbose, args.excel_experimental) catch |err| {
+        processArchive(allocator, path_dup, buf, &stats, args.verbose, args.excel_experimental, args.max_streams) catch |err| {
             std.debug.print("  parse error in {s}: {s}\n", .{ path_dup, @errorName(err) });
             stats.files_failed_parse += 1;
         };
+
+        if (args.progress_every) |every| {
+            if (every != 0 and stats.files_scanned % every == 0) {
+                std.debug.print(
+                    "progress: archives={d} deflate={d} registry={d} configured={d} missed={d}\n",
+                    .{
+                        stats.files_scanned,
+                        stats.entries_deflate,
+                        stats.entries_identified,
+                        stats.entries_configured_identified,
+                        stats.entries_missed,
+                    },
+                );
+            }
+        }
     }
 
     var stdout_buf: [4096]u8 = undefined;
