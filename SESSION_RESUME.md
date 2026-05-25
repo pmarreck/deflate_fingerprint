@@ -207,6 +207,14 @@ Updated hypothesis:
   LibreOffice `scorely` and Excel 14 sample worksheet entries are not exact.
   This supports Peter's concern: Office worksheet behavior should be clustered
   by byte-reproduction behavior, not labeled as one universal Excel encoder.
+- Follow-up parameter checks on extracted CPI false negatives:
+  - `sheet3.xml` and `sheet5.xml` reproduce byte-exact with segmented
+    `chain=16 nice=60 insert=4`, memLevel=7, same sheetData flush topology.
+  - `sheet6.xml` remains unresolved. `chain=16 nice>=48 insert=4` matches the
+    prefix and first main block boundary but later over-matches at token index
+    73,590 / raw offset 859,834: target `match(len=10, dist=10195)`, candidate
+    `match(len=20, dist=10195)`. Changing `insert` away from 4 breaks much
+    earlier. Treat it as a third worksheet behavior cluster until resolved.
 
 ## Producer/version variance concern (Peter, 2026-05-25)
 
@@ -256,15 +264,19 @@ Current probe check:
 
 1. **Resolve sheet2 / Excel large-entry mystery** (current focus).
 2. **Validate the exact CPI worksheet hypothesis on more Excel streams**:
-   `chain=16 nice=35 insert=4`, memLevel=7, segmented at worksheet sheetData
-   sync-flush boundaries. Do not promote it as "Excel" until multiple producer
-   versions/platforms agree.
-3. **Re-run probe on Excel to see if remaining 175 misses dropped** with
+   Cluster A: `chain=16 nice=35 insert=4` covers CPI sheets 1/2/4. Cluster B:
+   `chain=16 nice=60 insert=4` covers CPI sheets 3/5. Do not promote either
+   as "Excel" until multiple producer versions/platforms agree.
+3. **Resolve CPI sheet6**:
+   It likely needs another match-selection dial beyond `nice_match`/chain/insert
+   as currently modeled, because the best prefix candidate eventually
+   over-matches a repeated row.
+4. **Re-run probe on Excel to see if remaining 175 misses dropped** with
    MAX_DIST fix. (Probably no, since the L1 fix doesn't change OPC output
    for entries where Excel is non-L1.)
-4. **Re-run probe on Fileserver Books/Downloads** to see broader hit-rate
+5. **Re-run probe on Fileserver Books/Downloads** to see broader hit-rate
    improvement from MAX_DIST fix.
-5. Apple Mac installer non-zlib family (separate investigation from earlier).
+6. Apple Mac installer non-zlib family (separate investigation from earlier).
 
 ## Recent commit log (most recent first)
 

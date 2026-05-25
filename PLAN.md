@@ -90,10 +90,14 @@
   memLevel=7, segmented sheetData sync-flush topology across more Excel
   versions/platforms before promoting it from probe hypothesis to a stable
   fingerprint.
-- [ ] Excel worksheet follow-up: parameter-sweep the CPI false negatives
-  (`sheet3`, `sheet5`, `sheet6`) separately; their first compressed diffs are
-  657, 968, and 2 respectively, so at least two worksheet behavior clusters
-  likely exist inside the same Excel 16 workbook.
+- [x] Excel worksheet follow-up: parameter-sweep CPI `sheet3` and `sheet5`;
+  both reproduce byte-exact with segmented `chain=16 nice=60 insert=4`,
+  memLevel=7, so the Excel 16 CPI workbook has at least two worksheet
+  parameter clusters (`nice=35` and `nice=60`) (2026-05-25 11:20 EDT)
+- [ ] Excel worksheet follow-up: resolve CPI `sheet6`; best observed partial
+  hypothesis is segmented `chain=16 nice>=48 insert=4`, memLevel=7, which
+  matches the prefix and first main boundary but later over-matches
+  `len=20` where target chooses `len=10` at raw offset 859,834.
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
