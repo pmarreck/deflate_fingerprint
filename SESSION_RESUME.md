@@ -21,7 +21,7 @@ needs byte-identical reconstruction of embedded compressed streams).
   - Fileserver Books / 100 ePubs (13,761):  73.4%
   - Fileserver Downloads (6,091):           85.7%
   - Fileserver Documents / 2 .xlsx (516):   66.1% with fingerprint #28
-- 111 full-suite tests green; current module architecture includes
+- 113 full-suite tests green; current module architecture includes
   bitstream/huffman/match/blocks/encoder/fidelity/inspect/ooxml/lib.
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
   reports per-fingerprint hits, and in verbose mode prints OOXML producer
@@ -123,7 +123,7 @@ zlib encoder paths:
   chunk beginning with a match whose distance reaches into the previous chunk.
 - `encodeOfficeOPC` now uses raw-slice-aware chunk emission too; this is pinned
   by a small cross-chunk-match regression test.
-- Full suite is now 111/111 green.
+- Full suite is now 113/113 green.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
@@ -201,22 +201,22 @@ Updated hypothesis:
   `/tmp/dfp_excel_probe/sheet2_orig.bin`. Its token stream is identical to the
   target. Prefix-history mode with the same params is not exact.
 - `zip-corpus-probe --excel-experimental /tmp/dfp_xlsx_probe_dir --verbose`
-  currently reports 5/8 worksheet XML entries exact across two unregistered
+  currently reports 6/8 worksheet XML entries exact across three unregistered
   CPI clusters:
   - `nice=35`: CPI `sheet1.xml`, `sheet2.xml`, `sheet4.xml`
   - `nice=60`: CPI `sheet3.xml`, `sheet5.xml`
-  - unresolved: CPI `sheet6.xml`; LibreOffice `scorely` and Excel 14 sample
-    worksheet entries are not exact.
+  - `row1024`: CPI `sheet6.xml`
+  LibreOffice `scorely` and Excel 14 sample worksheet entries are not exact.
   This supports Peter's concern: Office worksheet behavior should be clustered
   by byte-reproduction behavior, not labeled as one universal Excel encoder.
 - Follow-up parameter checks on extracted CPI false negatives:
   - `sheet3.xml` and `sheet5.xml` reproduce byte-exact with segmented
     `chain=16 nice=60 insert=4`, memLevel=7, same sheetData flush topology.
-  - `sheet6.xml` remains unresolved. `chain=16 nice>=48 insert=4` matches the
-    prefix and first main block boundary but later over-matches at token index
-    73,590 / raw offset 859,834: target `match(len=10, dist=10195)`, candidate
-    `match(len=20, dist=10195)`. Changing `insert` away from 4 breaks much
-    earlier. Treat it as a third worksheet behavior cluster until resolved.
+  - `sheet6.xml` reproduces byte-exact with segmented `chain=16 nice=48
+    insert=4`, memLevel=7, plus extra sync flushes at 1024-row boundaries.
+    The key clue was that the previous best candidate over-matched across raw
+    offset 859,844, exactly where the target stream has two empty STORED flush
+    blocks before row 1025.
 
 ## Producer/version variance concern (Peter, 2026-05-25)
 
@@ -267,18 +267,15 @@ Current probe check:
 1. **Resolve sheet2 / Excel large-entry mystery** (current focus).
 2. **Validate the exact CPI worksheet hypothesis on more Excel streams**:
    Cluster A: `chain=16 nice=35 insert=4` covers CPI sheets 1/2/4. Cluster B:
-   `chain=16 nice=60 insert=4` covers CPI sheets 3/5. Do not promote either
-   as "Excel" until multiple producer versions/platforms agree.
-3. **Resolve CPI sheet6**:
-   It likely needs another match-selection dial beyond `nice_match`/chain/insert
-   as currently modeled, because the best prefix candidate eventually
-   over-matches a repeated row.
-4. **Re-run probe on Excel to see if remaining 175 misses dropped** with
+   `chain=16 nice=60 insert=4` covers CPI sheets 3/5. Cluster C:
+   `chain=16 nice=48 insert=4 row_chunk=1024` covers CPI sheet6. Do not promote
+   any cluster as "Excel" until multiple producer versions/platforms agree.
+3. **Re-run probe on Excel to see if remaining 175 misses dropped** with
    MAX_DIST fix. (Probably no, since the L1 fix doesn't change OPC output
    for entries where Excel is non-L1.)
-5. **Re-run probe on Fileserver Books/Downloads** to see broader hit-rate
+4. **Re-run probe on Fileserver Books/Downloads** to see broader hit-rate
    improvement from MAX_DIST fix.
-6. Apple Mac installer non-zlib family (separate investigation from earlier).
+5. Apple Mac installer non-zlib family (separate investigation from earlier).
 
 ## Recent commit log (most recent first)
 
@@ -297,5 +294,5 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 111/111 green.
+3. Run `./test` — should be 113/113 green.
 4. Continue with the sheet2/Excel mystery per "Specific next experiment".

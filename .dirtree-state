@@ -14,7 +14,7 @@ annotate=[
 	include/deflate_fingerprint.h = Public C FFI header for non-Zig callers including blar.
 	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.
 	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, raw-slice-aware multi-block dispatch helpers.
-	src/encoder.zig = Top-level fingerprint encoders: zlib variants, Office OPC, and experimental Excel worksheet candidates.
+	src/encoder.zig = Top-level fingerprint encoders: zlib variants, Office OPC, and experimental Excel worksheet candidates including row-chunk flush topology.
 	src/fidelity.zig = Test-only real-zlib oracle via @cImport(zlib.h) for byte-exact fidelity checks.
 	src/huffman.zig = zlib-compatible Huffman tree builder, canonical codes, and code-length RLE.
 	src/inspect.zig = Pure DEFLATE inspector: block ranges plus literal/match token traces for LZ77 divergence analysis.
@@ -22,6 +22,6 @@ annotate=[
 	src/match.zig = zlib-style LZ77 tokenizers, longestMatch, and zlib MAX_DIST behavior.
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
-	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE hypotheses, sweeps fast params, and reports token-level divergence.
-	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, miss block shapes, and optional Excel worksheet candidate coverage.
+	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE hypotheses, sweeps fast params, reports token divergence, and tests row-chunk flush topology.
+	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, miss block shapes, and optional Excel worksheet cluster coverage.
 ]

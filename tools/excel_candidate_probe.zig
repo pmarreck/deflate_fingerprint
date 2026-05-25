@@ -101,6 +101,29 @@ fn printRawContext(raw: []const u8, center: usize) void {
     std.debug.print("\"\n", .{});
 }
 
+/// Print neighboring decoded tokens around a divergence for local alignment.
+/// This helps distinguish a single bad match from compensating prior decisions.
+fn printTokenContext(label: []const u8, tokens: []const dfp.inspect.TokenTraceItem, center: usize) void {
+    const start = center -| 3;
+    const end = @min(tokens.len, center + 4);
+    std.debug.print("    {s}_context:\n", .{label});
+    var i = start;
+    while (i < end) : (i += 1) {
+        const marker: u8 = if (i == center) '>' else ' ';
+        const item = tokens[i];
+        std.debug.print("      {c}#{d} block={d}/{s} raw={d}-{d} ", .{
+            marker,
+            i,
+            item.block_index,
+            @tagName(item.block_type),
+            item.raw_start,
+            item.raw_end,
+        });
+        printToken(item.token);
+        std.debug.print("\n", .{});
+    }
+}
+
 /// Decode target and candidate streams, then report their first token mismatch.
 /// This finds the LZ77 decision that caused a near-reproduction to diverge.
 fn reportTokenDivergence(
@@ -146,6 +169,8 @@ fn reportTokenDivergence(
         });
         printToken(got_item.token);
         std.debug.print("\n", .{});
+        printTokenContext("target", target_tokens, i);
+        printTokenContext("got", got_tokens, i);
         printRawContext(raw, @min(target_item.raw_start, raw.len));
         return;
     }
@@ -204,6 +229,7 @@ const CandidateArgs = struct {
     nice: u16,
     insert: u16,
     history: bool,
+    row_chunk: ?u32 = null,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -245,6 +271,23 @@ pub fn main(init: std.process.Init) !void {
                 .insert = try std.fmt.parseInt(u16, insert_arg, 10),
                 .history = false,
             };
+        } else if (std.mem.eql(u8, arg, "--row-chunk")) {
+            const row_chunk_arg = it.next() orelse {
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history] [--row-chunk N]]\n", .{});
+                return error.BadArgs;
+            };
+            if (candidate_args) |candidate| {
+                candidate_args = .{
+                    .chain = candidate.chain,
+                    .nice = candidate.nice,
+                    .insert = candidate.insert,
+                    .history = candidate.history,
+                    .row_chunk = try std.fmt.parseInt(u32, row_chunk_arg, 10),
+                };
+            } else {
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history] [--row-chunk N]]\n", .{});
+                return error.BadArgs;
+            }
         } else if (std.mem.eql(u8, arg, "--history")) {
             if (candidate_args) |candidate| {
                 candidate_args = .{
@@ -252,13 +295,14 @@ pub fn main(init: std.process.Init) !void {
                     .nice = candidate.nice,
                     .insert = candidate.insert,
                     .history = true,
+                    .row_chunk = candidate.row_chunk,
                 };
             } else {
-                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history] [--row-chunk N]]\n", .{});
                 return error.BadArgs;
             }
         } else {
-            std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
+            std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history] [--row-chunk N]]\n", .{});
             return error.BadArgs;
         }
     }
@@ -302,8 +346,15 @@ pub fn main(init: std.process.Init) !void {
     try reportTokenDivergence(allocator, "history chain=16 nice=35 insert=4", best_history, target, raw);
 
     if (candidate_args) |candidate| {
-        const label = if (candidate.history) "custom history" else "custom segmented";
-        const custom = if (candidate.history)
+        const label = if (candidate.row_chunk != null)
+            "custom row-chunked"
+        else if (candidate.history)
+            "custom history"
+        else
+            "custom segmented";
+        const custom = if (candidate.row_chunk) |row_chunk|
+            try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsRowChunks(allocator, raw, candidate.chain, candidate.nice, candidate.insert, row_chunk)
+        else if (candidate.history)
             try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, candidate.chain, candidate.nice, candidate.insert)
         else
             try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, candidate.chain, candidate.nice, candidate.insert);

@@ -42,6 +42,7 @@ const Stats = struct {
     excel_experimental_exact_any: usize = 0,
     excel_experimental_exact_nice35: usize = 0,
     excel_experimental_exact_nice60: usize = 0,
+    excel_experimental_exact_row1024: usize = 0,
     hits_per_fp: [256]usize = [_]usize{0} ** 256,
 
     fn print(self: Stats, writer: anytype) !void {
@@ -61,6 +62,7 @@ const Stats = struct {
             try writer.print("  byte-exact any:   {d}\n", .{self.excel_experimental_exact_any});
             try writer.print("  nice=35 exact:    {d}\n", .{self.excel_experimental_exact_nice35});
             try writer.print("  nice=60 exact:    {d}\n", .{self.excel_experimental_exact_nice60});
+            try writer.print("  row1024 exact:    {d}\n", .{self.excel_experimental_exact_row1024});
         }
         if (self.entries_deflate > 0) {
             const attempted = self.entries_deflate - self.entries_inflate_failed;
@@ -318,10 +320,24 @@ fn processDeflateEntry(
                 if (std.mem.eql(u8, candidate, compressed)) {
                     excel_experimental_label = "nice60";
                     stats.excel_experimental_exact_any += 1;
-                    stats.excel_experimental_exact_nice60 += 1;
+                stats.excel_experimental_exact_nice60 += 1;
+            }
+        }
+
+        if (std.mem.eql(u8, excel_experimental_label, "none")) {
+            const got_row = dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsRowChunks(allocator, original, 16, 48, 4, 1024) catch null;
+            if (got_row) |candidate| {
+                defer allocator.free(candidate);
+                excel_experimental_len = candidate.len;
+                excel_experimental_first_diff = firstDiff(candidate, compressed);
+                if (std.mem.eql(u8, candidate, compressed)) {
+                    excel_experimental_label = "row1024";
+                    stats.excel_experimental_exact_any += 1;
+                    stats.excel_experimental_exact_row1024 += 1;
                 }
             }
         }
+    }
     }
 
     // Identify.
@@ -408,7 +424,8 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
                 \\
                 \\--excel-experimental additionally tests current unregistered
                 \\Excel worksheet hypotheses: memLevel=7, chain=16, insert=4,
-                \\nice=35 and nice=60, segmented at sheetData sync-flush boundaries.
+                \\nice=35 and nice=60 segmented at sheetData boundaries, plus
+                \\nice=48 with extra 1024-row chunk sync-flush boundaries.
                 \\
                 \\
             , .{});

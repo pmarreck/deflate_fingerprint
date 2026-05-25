@@ -1157,6 +1157,44 @@ fn worksheetFlushOffsets(raw: []const u8) struct { offsets: [2]usize, len: usize
     return .{ .offsets = .{ sheet_start, sheet_end }, .len = 2 };
 }
 
+/// Infer worksheet sync-flush boundaries at sheetData and row chunk starts.
+/// Excel large sheets can flush before rows 1025, 2049, ... within sheetData.
+fn worksheetRowChunkFlushOffsets(allocator: std.mem.Allocator, raw: []const u8, row_chunk: u32) ![]usize {
+    var offsets: std.ArrayList(usize) = .empty;
+    errdefer offsets.deinit(allocator);
+
+    const base = worksheetFlushOffsets(raw);
+    if (base.len == 0) return offsets.toOwnedSlice(allocator);
+    const sheet_start = base.offsets[0];
+    const sheet_end = base.offsets[1];
+    try offsets.append(allocator, sheet_start);
+    if (row_chunk == 0) {
+        try offsets.append(allocator, sheet_end);
+        return offsets.toOwnedSlice(allocator);
+    }
+
+    const prefix = "<row r=\"";
+    var scan = sheet_start;
+    while (scan < sheet_end) {
+        const rel = std.mem.indexOf(u8, raw[scan..sheet_end], prefix) orelse break;
+        const row_start = scan + rel;
+        const number_start = row_start + prefix.len;
+        const number_end_rel = std.mem.indexOfScalar(u8, raw[number_start..sheet_end], '"') orelse break;
+        const number_end = number_start + number_end_rel;
+        const row_number = std.fmt.parseInt(u32, raw[number_start..number_end], 10) catch {
+            scan = number_end + 1;
+            continue;
+        };
+        if (row_number > 1 and (row_number - 1) % row_chunk == 0) {
+            try offsets.append(allocator, row_start);
+        }
+        scan = number_end + 1;
+    }
+
+    try offsets.append(allocator, sheet_end);
+    return offsets.toOwnedSlice(allocator);
+}
+
 fn encodeExcelWorksheetOPCWithParams(
     allocator: std.mem.Allocator,
     raw: []const u8,
@@ -1224,6 +1262,33 @@ pub fn encodeExcelWorksheetOPCMem7FastParamsHistory(
     );
 }
 
+pub fn encodeExcelWorksheetOPCMem7FastParamsRowChunks(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    max_chain_length: u32,
+    nice_match: u16,
+    max_insert_length: u16,
+    row_chunk: u32,
+) ![]u8 {
+    const params: LZ77Params = .{
+        .max_chain_length = max_chain_length,
+        .good_match = 4,
+        .nice_match = nice_match,
+        .max_lazy_match = max_insert_length,
+    };
+    const flushes = try worksheetRowChunkFlushOffsets(allocator, raw, row_chunk);
+    defer allocator.free(flushes);
+    return encodeOfficeOPCSegmentedWithParams(
+        allocator,
+        raw,
+        params,
+        7,
+        flushes,
+        2,
+        1,
+    );
+}
+
 test "encodeOfficeOPC chunking tolerates matches that reference prior chunks" {
     const got = try encodeOfficeOPCChunked(testing.allocator, "XABCABC", 4);
     defer testing.allocator.free(got);
@@ -1278,6 +1343,37 @@ test "encodeExcelWorksheetOPCMem7FastParamsHistory emits worksheet boundary flus
     try testing.expectEqual(@as(usize, 2), start_flushes);
     try testing.expectEqual(@as(usize, 2), end_flushes);
     try testing.expectEqual(@as(usize, 1), final_flushes);
+}
+
+test "encodeExcelWorksheetOPCMem7FastParamsRowChunks emits row chunk flush markers" {
+    const raw =
+        "<worksheet><sheetData>" ++
+        "<row r=\"1\"><c>A</c></row>" ++
+        "<row r=\"2\"><c>B</c></row>" ++
+        "<row r=\"3\"><c>C</c></row>" ++
+        "</sheetData><autoFilter/>";
+    const got = try encodeExcelWorksheetOPCMem7FastParamsRowChunks(testing.allocator, raw, 16, 60, 4, 2);
+    defer testing.allocator.free(got);
+
+    const blocks_seen = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(blocks_seen);
+
+    const sheet_start = std.mem.indexOf(u8, raw, "<sheetData").?;
+    const row3_start = std.mem.indexOf(u8, raw, "<row r=\"3\"").?;
+    const sheet_end = std.mem.indexOf(u8, raw, "</sheetData>").? + "</sheetData>".len;
+    var sheet_start_flushes: usize = 0;
+    var row3_flushes: usize = 0;
+    var sheet_end_flushes: usize = 0;
+    for (blocks_seen) |block| {
+        if (block.block_type != .stored or block.raw_start != block.raw_end) continue;
+        if (block.raw_start == sheet_start) sheet_start_flushes += 1;
+        if (block.raw_start == row3_start) row3_flushes += 1;
+        if (block.raw_start == sheet_end) sheet_end_flushes += 1;
+    }
+
+    try testing.expectEqual(@as(usize, 2), sheet_start_flushes);
+    try testing.expectEqual(@as(usize, 2), row3_flushes);
+    try testing.expectEqual(@as(usize, 2), sheet_end_flushes);
 }
 
 // ─── Phase F debug tests ──────────────────────────────────────────────────

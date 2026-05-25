@@ -35,7 +35,7 @@
 - [x] Fix chunked token-only block helpers so cross-block match references reconstruct from the full raw stream before per-block STORED fallback decisions; added regression test and verified CPI `.xlsx` verbose probe no longer crashes (2026-05-25 09:10 EDT)
 - [x] Add worksheet-specific Excel candidate encoders and `excel-candidate-probe`; initial CPI candidate (`chain=16 nice=28 insert=4`, memLevel=7, sheetData flushes) matched the prefix block and first 10,529 compressed bytes but was still not byte-exact (2026-05-25 09:45 EDT)
 - [x] Add token-level DEFLATE trace inspection and use it to resolve the CPI sheet2 divergence: the first miss was a too-low `nice_match` early exit; segmented `chain=16 nice=35 insert=4`, memLevel=7, with sheetData sync flushes reproduces the CPI worksheet stream byte-exact (2026-05-25 10:35 EDT)
-- [x] Add `zip-corpus-probe --excel-experimental` to count unregistered worksheet candidate coverage across OOXML corpora; local `/tmp/dfp_xlsx_probe_dir` result: 5/8 worksheet XML entries exact across two Excel 16 CPI clusters (`nice=35`: sheets 1/2/4, `nice=60`: sheets 3/5) (2026-05-25 11:25 EDT)
+- [x] Add `zip-corpus-probe --excel-experimental` to count unregistered worksheet candidate coverage across OOXML corpora; local `/tmp/dfp_xlsx_probe_dir` result: 6/8 worksheet XML entries exact across three Excel 16 CPI clusters (`nice=35`: sheets 1/2/4, `nice=60`: sheets 3/5, `row1024`: sheet6) (2026-05-25 11:35 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports
@@ -94,10 +94,9 @@
   both reproduce byte-exact with segmented `chain=16 nice=60 insert=4`,
   memLevel=7, so the Excel 16 CPI workbook has at least two worksheet
   parameter clusters (`nice=35` and `nice=60`) (2026-05-25 11:20 EDT)
-- [ ] Excel worksheet follow-up: resolve CPI `sheet6`; best observed partial
-  hypothesis is segmented `chain=16 nice>=48 insert=4`, memLevel=7, which
-  matches the prefix and first main boundary but later over-matches
-  `len=20` where target chooses `len=10` at raw offset 859,834.
+- [x] Excel worksheet follow-up: resolve CPI `sheet6`; byte-exact with
+  segmented `chain=16 nice=48 insert=4`, memLevel=7, plus additional sync
+  flushes at 1024-row boundaries (`row1024` cluster) (2026-05-25 11:35 EDT)
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
