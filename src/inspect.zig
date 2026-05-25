@@ -25,6 +25,24 @@ pub const BlockInfo = struct {
     token_count: usize,
 };
 
+pub const MatchToken = struct {
+    length: u16,
+    distance: u16,
+};
+
+pub const DecodedToken = union(enum) {
+    literal: u8,
+    match: MatchToken,
+};
+
+pub const TokenTraceItem = struct {
+    block_index: usize,
+    block_type: BlockType,
+    raw_start: usize,
+    raw_end: usize,
+    token: DecodedToken,
+};
+
 pub const InspectError = error{
     UnexpectedEndOfStream,
     BadStoredBlockLength,
@@ -60,6 +78,11 @@ const BitReader = struct {
         const next = self.bit_pos + n * 8;
         if (next > self.bytes.len * 8) return error.UnexpectedEndOfStream;
         self.bit_pos = next;
+    }
+
+    fn readAlignedByte(self: *BitReader) InspectError!u8 {
+        if (self.bit_pos % 8 != 0) self.alignToByte();
+        return @intCast(try self.readBits(8));
     }
 
     fn readMsbCode(self: *BitReader, nbits: u6) InspectError!u16 {
@@ -188,11 +211,58 @@ fn distanceInfo(symbol: u16) InspectError!DistanceInfo {
     };
 }
 
-fn inspectFixedPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize {
+fn appendLiteralToken(
+    tokens: ?*std.ArrayList(TokenTraceItem),
+    allocator: std.mem.Allocator,
+    block_index: usize,
+    block_type: BlockType,
+    raw_start: usize,
+    byte: u8,
+) !void {
+    if (tokens) |items| {
+        try items.append(allocator, .{
+            .block_index = block_index,
+            .block_type = block_type,
+            .raw_start = raw_start,
+            .raw_end = raw_start + 1,
+            .token = .{ .literal = byte },
+        });
+    }
+}
+
+fn appendMatchToken(
+    tokens: ?*std.ArrayList(TokenTraceItem),
+    allocator: std.mem.Allocator,
+    block_index: usize,
+    block_type: BlockType,
+    raw_start: usize,
+    length: u16,
+    distance: u16,
+) !void {
+    if (tokens) |items| {
+        try items.append(allocator, .{
+            .block_index = block_index,
+            .block_type = block_type,
+            .raw_start = raw_start,
+            .raw_end = raw_start + length,
+            .token = .{ .match = .{ .length = length, .distance = distance } },
+        });
+    }
+}
+
+fn inspectFixedPayload(
+    allocator: std.mem.Allocator,
+    reader: *BitReader,
+    raw_pos: *usize,
+    block_index: usize,
+    tokens: ?*std.ArrayList(TokenTraceItem),
+) !usize {
     var token_count: usize = 0;
     while (true) {
         const symbol = try readFixedLitLen(reader);
         if (symbol < 256) {
+            const raw_start = raw_pos.*;
+            try appendLiteralToken(tokens, allocator, block_index, .fixed, raw_start, @intCast(symbol));
             raw_pos.* += 1;
             token_count += 1;
         } else if (symbol == 256) {
@@ -202,8 +272,12 @@ fn inspectFixedPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize {
             const extra_len: u16 = @intCast(try reader.readBits(len_info.extra_bits));
             const distance_symbol = try fixedDistanceCode(reader);
             const dist_info = try distanceInfo(distance_symbol);
-            _ = try reader.readBits(dist_info.extra_bits);
-            raw_pos.* += @as(usize, len_info.base + extra_len);
+            const extra_dist: u16 = @intCast(try reader.readBits(dist_info.extra_bits));
+            const length = len_info.base + extra_len;
+            const distance = dist_info.base + extra_dist;
+            const raw_start = raw_pos.*;
+            try appendMatchToken(tokens, allocator, block_index, .fixed, raw_start, length, distance);
+            raw_pos.* += @as(usize, length);
             token_count += 1;
         }
     }
@@ -215,7 +289,13 @@ fn repeatCodeLength(lens: []u8, index: *usize, repeat: usize, value: u8) Inspect
     index.* += repeat;
 }
 
-fn inspectDynamicPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize {
+fn inspectDynamicPayload(
+    allocator: std.mem.Allocator,
+    reader: *BitReader,
+    raw_pos: *usize,
+    block_index: usize,
+    tokens: ?*std.ArrayList(TokenTraceItem),
+) !usize {
     const hlit_count: usize = @as(usize, try reader.readBits(5)) + 257;
     const hdist_count: usize = @as(usize, try reader.readBits(5)) + 1;
     const hclen_count: usize = @as(usize, try reader.readBits(4)) + 4;
@@ -270,6 +350,8 @@ fn inspectDynamicPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize
     while (true) {
         const symbol = try decodeSymbol(reader, lit_lens[0..hlit_count], lit_codes[0..hlit_count], 15);
         if (symbol < 256) {
+            const raw_start = raw_pos.*;
+            try appendLiteralToken(tokens, allocator, block_index, .dynamic, raw_start, @intCast(symbol));
             raw_pos.* += 1;
             token_count += 1;
         } else if (symbol == 256) {
@@ -279,8 +361,12 @@ fn inspectDynamicPayload(reader: *BitReader, raw_pos: *usize) InspectError!usize
             const extra_len: u16 = @intCast(try reader.readBits(len_info.extra_bits));
             const distance_symbol = try decodeSymbol(reader, dist_lens[0..hdist_count], dist_codes[0..hdist_count], 15);
             const dist_info = try distanceInfo(distance_symbol);
-            _ = try reader.readBits(dist_info.extra_bits);
-            raw_pos.* += @as(usize, len_info.base + extra_len);
+            const extra_dist: u16 = @intCast(try reader.readBits(dist_info.extra_bits));
+            const length = len_info.base + extra_len;
+            const distance = dist_info.base + extra_dist;
+            const raw_start = raw_pos.*;
+            try appendMatchToken(tokens, allocator, block_index, .dynamic, raw_start, length, distance);
+            raw_pos.* += @as(usize, length);
             token_count += 1;
         }
     }
@@ -311,8 +397,8 @@ pub fn inspectBlocks(allocator: std.mem.Allocator, deflate: []const u8) ![]Block
                 raw_pos += len;
                 token_count = len;
             },
-            .fixed => token_count = try inspectFixedPayload(&reader, &raw_pos),
-            .dynamic => token_count = try inspectDynamicPayload(&reader, &raw_pos),
+            .fixed => token_count = try inspectFixedPayload(allocator, &reader, &raw_pos, blocks.items.len, null),
+            .dynamic => token_count = try inspectDynamicPayload(allocator, &reader, &raw_pos, blocks.items.len, null),
             .reserved => return error.ReservedBlockType,
         }
 
@@ -331,6 +417,44 @@ pub fn inspectBlocks(allocator: std.mem.Allocator, deflate: []const u8) ![]Block
     }
 
     return blocks.toOwnedSlice(allocator);
+}
+
+/// Decode raw RFC 1951 DEFLATE into a flat literal/match trace for forensics.
+/// This exposes LZ77 decisions so candidate encoders can be diffed by token.
+pub fn inspectTokens(allocator: std.mem.Allocator, deflate: []const u8) ![]TokenTraceItem {
+    var reader: BitReader = .{ .bytes = deflate };
+    var tokens: std.ArrayList(TokenTraceItem) = .empty;
+    errdefer tokens.deinit(allocator);
+
+    var raw_pos: usize = 0;
+    var block_index: usize = 0;
+    while (true) : (block_index += 1) {
+        const bfinal = (try reader.readBits(1)) != 0;
+        const block_type: BlockType = @enumFromInt(try reader.readBits(2));
+
+        switch (block_type) {
+            .stored => {
+                reader.alignToByte();
+                const len: u16 = @intCast(try reader.readBits(16));
+                const nlen: u16 = @intCast(try reader.readBits(16));
+                if (nlen != ~len) return error.BadStoredBlockLength;
+                var i: u16 = 0;
+                while (i < len) : (i += 1) {
+                    const raw_start = raw_pos;
+                    const byte = try reader.readAlignedByte();
+                    try appendLiteralToken(&tokens, allocator, block_index, .stored, raw_start, byte);
+                    raw_pos += 1;
+                }
+            },
+            .fixed => _ = try inspectFixedPayload(allocator, &reader, &raw_pos, block_index, &tokens),
+            .dynamic => _ = try inspectDynamicPayload(allocator, &reader, &raw_pos, block_index, &tokens),
+            .reserved => return error.ReservedBlockType,
+        }
+
+        if (bfinal) break;
+    }
+
+    return tokens.toOwnedSlice(allocator);
 }
 
 const testing = std.testing;
@@ -407,4 +531,58 @@ test "inspectBlocks reports dynamic-Huffman match block raw range" {
     try testing.expectEqual(@as(usize, 0), blocks[0].raw_start);
     try testing.expectEqual(raw.len, blocks[0].raw_end);
     try testing.expect(blocks[0].token_count < raw.len);
+}
+
+test "inspectTokens emits fixed-Huffman literal tokens with raw offsets" {
+    const raw = "ABC";
+    const deflated = try encoder.encodeFixedHuffmanLiterals(testing.allocator, raw);
+    defer testing.allocator.free(deflated);
+
+    const tokens = try inspectTokens(testing.allocator, deflated);
+    defer testing.allocator.free(tokens);
+
+    try testing.expectEqual(@as(usize, 3), tokens.len);
+    try testing.expectEqual(BlockType.fixed, tokens[0].block_type);
+    try testing.expectEqual(@as(usize, 0), tokens[0].raw_start);
+    try testing.expectEqual(@as(usize, 1), tokens[0].raw_end);
+    try testing.expectEqual(@as(u8, 'A'), tokens[0].token.literal);
+    try testing.expectEqual(@as(usize, 2), tokens[2].raw_start);
+    try testing.expectEqual(@as(usize, 3), tokens[2].raw_end);
+    try testing.expectEqual(@as(u8, 'C'), tokens[2].token.literal);
+}
+
+test "inspectTokens emits stored block bytes as literal tokens" {
+    const raw = "stored bytes";
+    const deflated = try encoder.encodeZlibStored(testing.allocator, raw);
+    defer testing.allocator.free(deflated);
+
+    const tokens = try inspectTokens(testing.allocator, deflated);
+    defer testing.allocator.free(tokens);
+
+    try testing.expectEqual(raw.len, tokens.len);
+    for (raw, 0..) |byte, i| {
+        try testing.expectEqual(BlockType.stored, tokens[i].block_type);
+        try testing.expectEqual(i, tokens[i].raw_start);
+        try testing.expectEqual(i + 1, tokens[i].raw_end);
+        try testing.expectEqual(byte, tokens[i].token.literal);
+    }
+}
+
+test "inspectTokens emits dynamic-Huffman match length and distance" {
+    const raw = "ABCABCABCABC";
+    const deflated = try encoder.encodeZlibLevel1(testing.allocator, raw);
+    defer testing.allocator.free(deflated);
+
+    const tokens = try inspectTokens(testing.allocator, deflated);
+    defer testing.allocator.free(tokens);
+
+    try testing.expectEqual(@as(usize, 5), tokens.len);
+    try testing.expectEqual(@as(u8, 'A'), tokens[0].token.literal);
+    try testing.expectEqual(@as(u8, 'B'), tokens[1].token.literal);
+    try testing.expectEqual(@as(u8, 'C'), tokens[2].token.literal);
+    try testing.expectEqual(@as(u8, 'A'), tokens[3].token.literal);
+    try testing.expectEqual(@as(usize, 4), tokens[4].raw_start);
+    try testing.expectEqual(@as(usize, 12), tokens[4].raw_end);
+    try testing.expectEqual(@as(u16, 8), tokens[4].token.match.length);
+    try testing.expectEqual(@as(u16, 3), tokens[4].token.match.distance);
 }

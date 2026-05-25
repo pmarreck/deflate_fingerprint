@@ -33,7 +33,8 @@
 - [x] Add tested zlib memLevel=7 encoding path for levels 1-3, including hash table sizing and 8,191-symbol block chunks with raw-slice-aware STORED fallback (2026-05-25 00:36 EDT)
 - [x] Add OOXML `docProps/app.xml` producer metadata parsing and verbose ZIP-probe reporting for Application/AppVersion clustering (2026-05-25)
 - [x] Fix chunked token-only block helpers so cross-block match references reconstruct from the full raw stream before per-block STORED fallback decisions; added regression test and verified CPI `.xlsx` verbose probe no longer crashes (2026-05-25 09:10 EDT)
-- [x] Add worksheet-specific Excel candidate encoders and `excel-candidate-probe`; current best CPI candidate (`chain=16 nice=28 insert=4`, memLevel=7, sheetData flushes) matches the prefix block and first 10,529 compressed bytes but is still not byte-exact (2026-05-25 09:45 EDT)
+- [x] Add worksheet-specific Excel candidate encoders and `excel-candidate-probe`; initial CPI candidate (`chain=16 nice=28 insert=4`, memLevel=7, sheetData flushes) matched the prefix block and first 10,529 compressed bytes but was still not byte-exact (2026-05-25 09:45 EDT)
+- [x] Add token-level DEFLATE trace inspection and use it to resolve the CPI sheet2 divergence: the first miss was a too-low `nice_match` early exit; segmented `chain=16 nice=35 insert=4`, memLevel=7, with sheetData sync flushes reproduces the CPI worksheet stream byte-exact (2026-05-25 10:35 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports
@@ -81,8 +82,13 @@
   behavior and record `docProps/app.xml` metadata (`Application`, `AppVersion`)
   plus ZIP version/subtype fields; do not assume one Excel fingerprint covers
   all Excel versions/platforms.
-- [ ] Excel worksheet next step: add token-stream diffing around the first CPI
-  divergence at compressed byte 10,529 for the best-so-far candidate.
+- [x] Excel worksheet next step: add token-stream diffing around the first CPI
+  divergence at compressed byte 10,529 for the best-so-far candidate. Completed
+  with `inspectTokens()`; the corrected CPI candidate is byte-exact.
+- [ ] Excel worksheet follow-up: validate `chain=16 nice=35 insert=4`,
+  memLevel=7, segmented sheetData sync-flush topology across more Excel
+  versions/platforms before promoting it from probe hypothesis to a stable
+  fingerprint.
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use

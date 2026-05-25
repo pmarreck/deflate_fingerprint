@@ -49,6 +49,119 @@ fn reportCandidate(
     std.debug.print("\n", .{});
 }
 
+/// Compare decoded LZ77 payload decisions, ignoring compressed-code spelling.
+/// Used by the probe to separate tokenization mismatches from Huffman drift.
+fn sameToken(a: dfp.inspect.DecodedToken, b: dfp.inspect.DecodedToken) bool {
+    return switch (a) {
+        .literal => |a_byte| switch (b) {
+            .literal => |b_byte| a_byte == b_byte,
+            .match => false,
+        },
+        .match => |a_match| switch (b) {
+            .literal => false,
+            .match => |b_match| a_match.length == b_match.length and a_match.distance == b_match.distance,
+        },
+    };
+}
+
+/// Print a compact literal/match token for human divergence triage.
+/// The output includes byte values so XML punctuation and control bytes remain clear.
+fn printToken(token: dfp.inspect.DecodedToken) void {
+    switch (token) {
+        .literal => |byte| {
+            if (byte >= 0x20 and byte <= 0x7e) {
+                std.debug.print("literal('{c}'/{d})", .{ byte, byte });
+            } else {
+                std.debug.print("literal(0x{x:0>2})", .{byte});
+            }
+        },
+        .match => |match| std.debug.print("match(len={d},dist={d})", .{ match.length, match.distance }),
+    }
+}
+
+/// Print a small printable/raw XML window around the divergent raw offset.
+/// Non-printing bytes are escaped or dotted so binary data stays terminal-safe.
+fn printRawContext(raw: []const u8, center: usize) void {
+    const start = center -| 32;
+    const end = @min(raw.len, center + 48);
+    std.debug.print("  raw_context[{d}..{d}]=\"", .{ start, end });
+    for (raw[start..end]) |byte| {
+        if (byte >= 0x20 and byte <= 0x7e) {
+            std.debug.print("{c}", .{byte});
+        } else if (byte == '\n') {
+            std.debug.print("\\n", .{});
+        } else if (byte == '\r') {
+            std.debug.print("\\r", .{});
+        } else if (byte == '\t') {
+            std.debug.print("\\t", .{});
+        } else {
+            std.debug.print(".", .{});
+        }
+    }
+    std.debug.print("\"\n", .{});
+}
+
+/// Decode target and candidate streams, then report their first token mismatch.
+/// This finds the LZ77 decision that caused a near-reproduction to diverge.
+fn reportTokenDivergence(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    got: []const u8,
+    target: []const u8,
+    raw: []const u8,
+) !void {
+    const target_tokens = try dfp.inspect.inspectTokens(allocator, target);
+    defer allocator.free(target_tokens);
+    const got_tokens = try dfp.inspect.inspectTokens(allocator, got);
+    defer allocator.free(got_tokens);
+
+    const n = @min(target_tokens.len, got_tokens.len);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const target_item = target_tokens[i];
+        const got_item = got_tokens[i];
+        if (target_item.block_index == got_item.block_index and
+            target_item.block_type == got_item.block_type and
+            target_item.raw_start == got_item.raw_start and
+            target_item.raw_end == got_item.raw_end and
+            sameToken(target_item.token, got_item.token))
+        {
+            continue;
+        }
+
+        std.debug.print("  token_divergence {s}: index={d}\n", .{ name, i });
+        std.debug.print("    target block={d}/{s} raw={d}-{d} ", .{
+            target_item.block_index,
+            @tagName(target_item.block_type),
+            target_item.raw_start,
+            target_item.raw_end,
+        });
+        printToken(target_item.token);
+        std.debug.print("\n", .{});
+        std.debug.print("    got    block={d}/{s} raw={d}-{d} ", .{
+            got_item.block_index,
+            @tagName(got_item.block_type),
+            got_item.raw_start,
+            got_item.raw_end,
+        });
+        printToken(got_item.token);
+        std.debug.print("\n", .{});
+        printRawContext(raw, @min(target_item.raw_start, raw.len));
+        return;
+    }
+
+    if (target_tokens.len != got_tokens.len) {
+        std.debug.print("  token_divergence {s}: common_prefix={d} target_tokens={d} got_tokens={d}\n", .{
+            name,
+            n,
+            target_tokens.len,
+            got_tokens.len,
+        });
+    } else {
+        std.debug.print("  token_divergence {s}: token streams identical\n", .{name});
+    }
+}
+
 fn reportSweepCandidate(
     allocator: std.mem.Allocator,
     max_chain: u32,
@@ -86,6 +199,13 @@ fn reportSweepCandidate(
     );
 }
 
+const CandidateArgs = struct {
+    chain: u32,
+    nice: u16,
+    insert: u16,
+    history: bool,
+};
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
@@ -102,11 +222,43 @@ pub fn main(init: std.process.Init) !void {
         return error.BadArgs;
     };
     var run_sweep = false;
+    var candidate_args: ?CandidateArgs = null;
     while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--sweep")) {
             run_sweep = true;
+        } else if (std.mem.eql(u8, arg, "--candidate")) {
+            const chain_arg = it.next() orelse {
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
+                return error.BadArgs;
+            };
+            const nice_arg = it.next() orelse {
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
+                return error.BadArgs;
+            };
+            const insert_arg = it.next() orelse {
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
+                return error.BadArgs;
+            };
+            candidate_args = .{
+                .chain = try std.fmt.parseInt(u32, chain_arg, 10),
+                .nice = try std.fmt.parseInt(u16, nice_arg, 10),
+                .insert = try std.fmt.parseInt(u16, insert_arg, 10),
+                .history = false,
+            };
+        } else if (std.mem.eql(u8, arg, "--history")) {
+            if (candidate_args) |candidate| {
+                candidate_args = .{
+                    .chain = candidate.chain,
+                    .nice = candidate.nice,
+                    .insert = candidate.insert,
+                    .history = true,
+                };
+            } else {
+                std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
+                return error.BadArgs;
+            }
         } else {
-            std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep]\n", .{});
+            std.debug.print("usage: excel-candidate-probe RAW TARGET [--sweep] [--candidate CHAIN NICE INSERT [--history]]\n", .{});
             return error.BadArgs;
         }
     }
@@ -139,13 +291,27 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.free(l3);
     try reportCandidate(allocator, "excel-worksheet-opc-l3-mem7", l3, target);
 
-    const best_segmented = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, 16, 28, 4);
+    const best_segmented = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, 16, 35, 4);
     defer allocator.free(best_segmented);
-    try reportCandidate(allocator, "best-so-far segmented chain=16 nice=28 insert=4", best_segmented, target);
+    try reportCandidate(allocator, "best-so-far segmented chain=16 nice=35 insert=4", best_segmented, target);
+    try reportTokenDivergence(allocator, "segmented chain=16 nice=35 insert=4", best_segmented, target, raw);
 
-    const best_history = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, 16, 28, 4);
+    const best_history = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, 16, 35, 4);
     defer allocator.free(best_history);
-    try reportCandidate(allocator, "best-so-far history chain=16 nice=28 insert=4", best_history, target);
+    try reportCandidate(allocator, "best-so-far history chain=16 nice=35 insert=4", best_history, target);
+    try reportTokenDivergence(allocator, "history chain=16 nice=35 insert=4", best_history, target, raw);
+
+    if (candidate_args) |candidate| {
+        const label = if (candidate.history) "custom history" else "custom segmented";
+        const custom = if (candidate.history)
+            try dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, candidate.chain, candidate.nice, candidate.insert)
+        else
+            try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, candidate.chain, candidate.nice, candidate.insert);
+        defer allocator.free(custom);
+        std.debug.print("\n", .{});
+        try reportCandidate(allocator, label, custom, target);
+        try reportTokenDivergence(allocator, label, custom, target, raw);
+    }
 
     const target_blocks = try dfp.inspect.inspectBlocks(allocator, target);
     defer allocator.free(target_blocks);
@@ -164,7 +330,7 @@ pub fn main(init: std.process.Init) !void {
     var chain: u32 = 12;
     while (chain <= 22) : (chain += 1) {
         var nice: u16 = 14;
-        while (nice <= 30) : (nice += 1) {
+        while (nice <= 40) : (nice += 1) {
             var insert: u16 = 4;
             while (insert <= 8) : (insert += 1) {
                 const got = try dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, raw, chain, nice, insert);
@@ -178,7 +344,7 @@ pub fn main(init: std.process.Init) !void {
     chain = 12;
     while (chain <= 22) : (chain += 1) {
         var nice: u16 = 14;
-        while (nice <= 30) : (nice += 1) {
+        while (nice <= 40) : (nice += 1) {
             var insert: u16 = 4;
             while (insert <= 8) : (insert += 1) {
                 const got = dfp.encoder.encodeExcelWorksheetOPCMem7FastParamsHistory(allocator, raw, chain, nice, insert) catch |err| {

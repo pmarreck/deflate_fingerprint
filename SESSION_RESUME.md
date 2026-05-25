@@ -21,7 +21,7 @@ needs byte-identical reconstruction of embedded compressed streams).
   - Fileserver Books / 100 ePubs (13,761):  73.4%
   - Fileserver Downloads (6,091):           85.7%
   - Fileserver Documents / 2 .xlsx (516):   66.1% with fingerprint #28
-- 108 full-suite tests green; current module architecture includes
+- 111 full-suite tests green; current module architecture includes
   bitstream/huffman/match/blocks/encoder/fidelity/inspect/ooxml/lib.
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
   reports per-fingerprint hits, and in verbose mode prints OOXML producer
@@ -30,6 +30,8 @@ needs byte-identical reconstruction of embedded compressed streams).
 - `tools/excel_candidate_probe.zig` compares worksheet-specific candidate
   encoders against a raw worksheet and target DEFLATE stream. Build/run via
   `nix develop -c zig build excel-probe -- RAW TARGET [--sweep]`.
+  Use `--candidate CHAIN NICE INSERT [--history]` to inspect arbitrary
+  fast-parameter hypotheses with token-divergence reporting.
 
 ## Recently landed
 
@@ -119,7 +121,7 @@ zlib encoder paths:
   chunk beginning with a match whose distance reaches into the previous chunk.
 - `encodeOfficeOPC` now uses raw-slice-aware chunk emission too; this is pinned
   by a small cross-chunk-match regression test.
-- Full suite is now 108/108 green.
+- Full suite is now 111/111 green.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
@@ -181,14 +183,21 @@ Updated hypothesis:
   streaming sync flushes, with match parameters between zlib levels 2 and 3,
   or a non-zlib/Java encoder with similar 8K pending-buffer behavior.
 - Candidate encoders now simulate the worksheet flush topology and sweep
-  level-2/level-3-adjacent fast parameters. Best CPI candidate so far:
+  level-2/level-3-adjacent fast parameters. Initial best CPI candidate
   `chain=16 nice=28 insert=4`, memLevel=7, segmented at `<sheetData>` and
-  `</sheetData>`. It matches the prefix block exactly, emits the same first
-  main-block 8,191-token cadence, matches the first 10,529 compressed bytes,
-  and is 50,182 bytes vs target 50,183. It is still not byte-exact.
-- Next experiment: add token-stream diffing around compressed byte 10,529 /
-  raw block 3442..88655 to identify the first match/literal decision that
-  diverges.
+  `</sheetData>`, matched the prefix block exactly and matched through
+  compressed byte 10,529, but was 50,182 bytes vs target 50,183.
+- Token-stream diffing then showed the first wrong LZ77 decision at token
+  index 6143 / raw offset 58,863: target `match(len=29, dist=15399)` vs
+  candidate `match(len=28, dist=14276)`. Raising `nice_match` past that
+  early-exit point moved the divergence later; `nice=32` matched the body block
+  boundaries but still missed at token index 18,729 (`len=35` target vs
+  `len=33` candidate).
+- Current CPI sheet2 result: segmented `chain=16 nice=35 insert=4`, memLevel=7,
+  with inferred sheetData sync flushes, reproduces
+  `/tmp/dfp_excel_probe/sheet2_comp.bin` byte-exact (`50,183` bytes) from
+  `/tmp/dfp_excel_probe/sheet2_orig.bin`. Its token stream is identical to the
+  target. Prefix-history mode with the same params is not exact.
 
 ## Producer/version variance concern (Peter, 2026-05-25)
 
@@ -237,8 +246,10 @@ Current probe check:
 ## Outstanding gaps to close
 
 1. **Resolve sheet2 / Excel large-entry mystery** (current focus).
-2. **Token-stream diff best worksheet candidate at first divergence**:
-   target CPI sheet2 vs `chain=16 nice=28 insert=4`, memLevel=7.
+2. **Validate the exact CPI worksheet hypothesis on more Excel streams**:
+   `chain=16 nice=35 insert=4`, memLevel=7, segmented at worksheet sheetData
+   sync-flush boundaries. Do not promote it as "Excel" until multiple producer
+   versions/platforms agree.
 3. **Re-run probe on Excel to see if remaining 175 misses dropped** with
    MAX_DIST fix. (Probably no, since the L1 fix doesn't change OPC output
    for entries where Excel is non-L1.)
@@ -263,5 +274,5 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 108/108 green.
+3. Run `./test` — should be 111/111 green.
 4. Continue with the sheet2/Excel mystery per "Specific next experiment".
