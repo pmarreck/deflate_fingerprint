@@ -34,11 +34,16 @@ Use the helper below to sample without committing data:
 tests/corpus/scripts/sample_local --nas-root /Volumes/Fileserver --n 25
 tests/corpus/scripts/sample_local --format xlsx --dry-run
 tests/corpus/scripts/sample_local --dest-root /tmp/dfp-local-corpus --format epub
+tests/corpus/scripts/sample_local --inventory .dfp-private/fileserver-files.txt --n 10
 ```
 
 The helper uses `rg --files` rather than `find`, because ripgrep parallelizes
 directory walking and behaves better on network mounts. Output lands under
 `tests/corpus/corpus_local/<format>/wild/`, which is gitignored.
+
+Use `--inventory .dfp-private/fileserver-files.txt` for NAS work. The first run
+does one broad `rg --files` traversal and writes private absolute paths to the
+ignored inventory; later runs sample from that cache.
 
 ## Stream Metadata
 

@@ -6,6 +6,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORPUS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST_ROOT="${DEST_ROOT:-$CORPUS_DIR/corpus_local}"
+INVENTORY_PATH="${INVENTORY_PATH:-}"
 
 NAS_ROOT="${NAS_ROOT:-/Volumes/Fileserver}"
 N="${N:-50}"
@@ -23,6 +24,7 @@ Options:
   --seed <int>       Deterministic shuffle seed (default: 42)
   --format <name>    Restrict to one format bucket
   --dest-root <path>  Destination corpus_local root (default: tests/corpus/corpus_local)
+  --inventory <path>  Reuse or create a private rg --files inventory
   --dry-run          Print the first few selected paths without copying
   -h, --help         Show this help
 EOF
@@ -35,6 +37,7 @@ while [[ $# -gt 0 ]]; do
 		--seed) shift; SEED="$1" ;;
 		--format) shift; FORMAT_FILTER="$1" ;;
 		--dest-root) shift; DEST_ROOT="$1" ;;
+		--inventory) shift; INVENTORY_PATH="$1" ;;
 		--dry-run) DRY_RUN=1 ;;
 		-h|--help) usage; exit 0 ;;
 		*) echo "unknown arg: $1" >&2; usage; exit 2 ;;
@@ -53,41 +56,126 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 formats=(
-	"zip:*.zip"
-	"docx:*.docx"
-	"xlsx:*.xlsx"
-	"pptx:*.pptx"
-	"epub:*.epub"
-	"jar:*.jar"
-	"war:*.war"
-	"ear:*.ear"
-	"apk:*.apk"
-	"ipa:*.ipa"
-	"whl:*.whl"
-	"xpi:*.xpi"
-	"crx:*.crx"
-	"vsix:*.vsix"
-	"odt:*.odt"
-	"ods:*.ods"
-	"odp:*.odp"
-	"cbz:*.cbz"
-	"pdf:*.pdf"
-	"png:*.png"
-	"gzip:*.gz,*.tgz"
-	"iwork:*.pages,*.numbers,*.key"
+	"zip:zip"
+	"docx:docx"
+	"xlsx:xlsx"
+	"pptx:pptx"
+	"epub:epub"
+	"jar:jar"
+	"war:war"
+	"ear:ear"
+	"apk:apk"
+	"ipa:ipa"
+	"whl:whl"
+	"xpi:xpi"
+	"crx:crx"
+	"vsix:vsix"
+	"odt:odt"
+	"ods:ods"
+	"odp:odp"
+	"cbz:cbz"
+	"pdf:pdf"
+	"png:png"
+	"gzip:gz,tgz"
+	"iwork:pages,numbers,key"
 )
+
+format_exts() {
+	local wanted="$1"
+	local spec format
+	for spec in "${formats[@]}"; do
+		format="${spec%%:*}"
+		if [[ "$format" == "$wanted" ]]; then
+			printf '%s\n' "${spec#*:}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+build_rg_globs() {
+	local exts_csv="$1"
+	local globs_ref="$2"
+	local ext
+	IFS=',' read -r -a exts_raw <<< "$exts_csv"
+	for ext in "${exts_raw[@]}"; do
+		eval "$globs_ref+=(\"-g\" \"*.$ext\")"
+	done
+}
+
+combined_exts() {
+	local spec
+	local all=""
+	for spec in "${formats[@]}"; do
+		if [[ -z "$all" ]]; then
+			all="${spec#*:}"
+		else
+			all="$all,${spec#*:}"
+		fi
+	done
+	printf '%s\n' "$all"
+}
+
+ensure_inventory_file() {
+	local exts_csv="$1"
+	local globs=()
+	build_rg_globs "$exts_csv" globs
+
+	if [[ -n "$INVENTORY_PATH" && -s "$INVENTORY_PATH" ]]; then
+		printf '%s\n' "$INVENTORY_PATH"
+		return 0
+	fi
+
+	local out_path="$INVENTORY_PATH"
+	if [[ -z "$out_path" ]]; then
+		out_path="$(mktemp "${TMPDIR:-/tmp}/dfp-file-inventory.XXXXXX")"
+	fi
+
+	if [[ -n "$INVENTORY_PATH" ]]; then
+		mkdir -p "$(dirname "$INVENTORY_PATH")"
+		local tmp_path="$INVENTORY_PATH.tmp.$$"
+		rg --files --no-ignore --no-messages --hidden \
+			"${globs[@]}" --glob '!._*' "$NAS_ROOT" > "$tmp_path" 2>/dev/null
+		local rc=$?
+		if [[ "$rc" -ne 0 ]]; then
+			echo "FATAL: failed to build inventory at $INVENTORY_PATH" >&2
+			exit "$rc"
+		fi
+		mv "$tmp_path" "$out_path"
+		printf '%s\n' "$out_path"
+		return 0
+	fi
+
+	rg --files --no-ignore --no-messages --hidden \
+		"${globs[@]}" --glob '!._*' "$NAS_ROOT" > "$out_path" 2>/dev/null
+	printf '%s\n' "$out_path"
+}
+
+filter_inventory_for_format() {
+	local format="$1"
+	local exts_csv
+	exts_csv="$(format_exts "$format")" || return 1
+	awk -v exts="$exts_csv" '
+		BEGIN {
+			n = split(exts, ext, ",")
+			for (i = 1; i <= n; i++) wanted["." tolower(ext[i])] = 1
+		}
+		{
+			path = tolower($0)
+			for (suffix in wanted) {
+				if (substr(path, length(path) - length(suffix) + 1) == suffix) {
+					print $0
+					next
+				}
+			}
+		}
+	'
+}
 
 sample_format() {
 	local format="$1"
-	local patterns_csv="$2"
+	local inventory_file="$2"
 	local dest_dir="$DEST_ROOT/$format/wild"
-	local globs=()
-	local pattern
-
-	IFS=',' read -r -a globs_raw <<< "$patterns_csv"
-	for pattern in "${globs_raw[@]}"; do
-		globs+=("-g" "$pattern")
-	done
 
 	local existing=0
 	if [[ -d "$dest_dir" ]]; then
@@ -99,8 +187,7 @@ sample_format() {
 	fi
 
 	local candidates
-	candidates=$(rg --files --no-ignore --no-messages --hidden \
-		"${globs[@]}" --glob '!._*' "$NAS_ROOT" 2>/dev/null \
+	candidates=$(filter_inventory_for_format "$format" < "$inventory_file" \
 		| awk -v seed="$SEED" 'BEGIN{srand(seed)} {print rand() "\t" $0}' \
 		| sort -k1,1n \
 		| cut -f2- \
@@ -130,13 +217,21 @@ sample_format() {
 	done <<< "$candidates"
 }
 
+inventory_exts="$(combined_exts)"
+if [[ -n "$FORMAT_FILTER" ]]; then
+	inventory_exts="$(format_exts "$FORMAT_FILTER")" || {
+		echo "unknown format: $FORMAT_FILTER" >&2
+		exit 2
+	}
+fi
+INVENTORY_FILE="$(ensure_inventory_file "$inventory_exts")"
+
 for spec in "${formats[@]}"; do
 	format="${spec%%:*}"
-	patterns="${spec#*:}"
 	if [[ -n "$FORMAT_FILTER" && "$FORMAT_FILTER" != "$format" ]]; then
 		continue
 	fi
-	sample_format "$format" "$patterns"
+	sample_format "$format" "$INVENTORY_FILE"
 done
 
 echo "Local corpus root: $DEST_ROOT"

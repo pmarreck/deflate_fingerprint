@@ -69,6 +69,18 @@ pub const Confidence = enum(u8) {
     near_match = 1,
 };
 
+/// Owned result for config-level fingerprinting. This is the shape the project
+/// is growing toward: not just "which registered encoder ID matched?", but
+/// "which abstract DEFLATE configuration reproduces this stream exactly?".
+pub const OwnedReproductionConfig = struct {
+    config: encoder.DeflateReproductionConfig,
+
+    pub fn deinit(self: *OwnedReproductionConfig, allocator: std.mem.Allocator) void {
+        allocator.free(self.config.sync_flushes);
+        self.config.sync_flushes = &.{};
+    }
+};
+
 /// One entry in the fingerprint registry. As more encoders land, append
 /// to `FINGERPRINTS` below. The registry is intentionally just data —
 /// no separate registry.zig until the table grows enough to justify it.
@@ -189,6 +201,83 @@ pub fn identify(
         .confidence = .near_match,
         .residual_bytes = 0,
     };
+}
+
+fn fastObservedParams(nice_match: u16) encoder.LZ77Params {
+    return .{
+        .max_chain_length = 16,
+        .good_match = 4,
+        .nice_match = nice_match,
+        .max_lazy_match = 4,
+    };
+}
+
+fn cloneObservedFlushEvents(
+    allocator: std.mem.Allocator,
+    observed: inspect.ObservedFlushSchedule,
+) ![]encoder.FlushEvent {
+    const flushes = try allocator.alloc(encoder.FlushEvent, observed.sync_flushes.len);
+    errdefer allocator.free(flushes);
+    for (observed.sync_flushes, 0..) |flush, i| {
+        flushes[i] = .{
+            .raw_offset = flush.raw_offset,
+            .empty_stored_blocks = flush.empty_stored_blocks,
+        };
+    }
+    return flushes;
+}
+
+const ObservedConfigCandidate = struct {
+    params: encoder.LZ77Params,
+    mem_level: u4,
+};
+
+const OBSERVED_CONFIG_CANDIDATES = [_]ObservedConfigCandidate{
+    .{ .params = encoder.LZ77_LEVEL_1, .mem_level = 8 },
+    .{ .params = encoder.LZ77_LEVEL_1, .mem_level = 7 },
+    .{ .params = fastObservedParams(35), .mem_level = 7 },
+    .{ .params = fastObservedParams(48), .mem_level = 7 },
+    .{ .params = fastObservedParams(60), .mem_level = 7 },
+};
+
+/// Try to infer an abstract DEFLATE reproduction config by deriving the target
+/// stream's RFC1951 flush topology, then sweeping generic LZ77/memLevel knobs.
+/// This intentionally does not encode producer names such as Excel or Office.
+pub fn fingerprintConfigured(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    target: []const u8,
+) !?OwnedReproductionConfig {
+    const schedule = inspect.observeFlushSchedule(allocator, target) catch return null;
+    defer schedule.deinit(allocator);
+    if (!schedule.has_empty_fixed_finish) return null;
+
+    for (OBSERVED_CONFIG_CANDIDATES) |candidate| {
+        const flushes = try cloneObservedFlushEvents(allocator, schedule);
+        errdefer allocator.free(flushes);
+        const config: encoder.DeflateReproductionConfig = .{
+            .params = candidate.params,
+            .mem_level = candidate.mem_level,
+            .sync_flushes = flushes,
+            .final_flush_empty_stored_blocks = schedule.final_flush_empty_stored_blocks,
+            .finish_mode = .empty_fixed_block,
+            .tokenization_mode = .segmented,
+        };
+
+        const encoded = encoder.encodeConfiguredDeflate(allocator, raw, config) catch |err| {
+            allocator.free(flushes);
+            if (err == error.OutOfMemory) return err;
+            continue;
+        };
+        defer allocator.free(encoded);
+
+        if (std.mem.eql(u8, encoded, target)) {
+            return .{ .config = config };
+        }
+        allocator.free(flushes);
+    }
+
+    return null;
 }
 
 /// Encode `raw` using the encoder for `fingerprint_id`. Returns
@@ -453,6 +542,48 @@ test "dfp_encode_configured: raw-offset flushes are exposed through C FFI" {
 
     try std.testing.expectEqual(@as(usize, 2), configured_flushes);
     try std.testing.expectEqual(@as(usize, 1), final_flushes);
+}
+
+test "fingerprintConfigured recovers observed flush topology and exact config reproduction" {
+    const raw =
+        "<worksheet><sheetData><row r=\"1\"><c>A</c></row>" ++
+        "<row r=\"2\"><c>BBBBBBBBBBBBBBBBBBBBBBBB</c></row>" ++
+        "</sheetData><tail>done</tail></worksheet>";
+    const flushes = [_]encoder.FlushEvent{
+        .{ .raw_offset = 11, .empty_stored_blocks = 2 },
+        .{ .raw_offset = raw.len - "</worksheet>".len, .empty_stored_blocks = 1 },
+    };
+    const target = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, .{
+        .params = fastObservedParams(48),
+        .mem_level = 7,
+        .sync_flushes = &flushes,
+        .final_flush_empty_stored_blocks = 1,
+        .tokenization_mode = .segmented,
+    });
+    defer std.testing.allocator.free(target);
+
+    var result = (try fingerprintConfigured(std.testing.allocator, raw, target)) orelse return error.ExpectedConfigMatch;
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.config.final_flush_empty_stored_blocks);
+    try std.testing.expectEqual(@as(usize, 2), result.config.sync_flushes.len);
+    try std.testing.expectEqual(@as(usize, 11), result.config.sync_flushes[0].raw_offset);
+    try std.testing.expectEqual(@as(usize, 2), result.config.sync_flushes[0].empty_stored_blocks);
+    try std.testing.expectEqual(raw.len - "</worksheet>".len, result.config.sync_flushes[1].raw_offset);
+    try std.testing.expectEqual(@as(usize, 1), result.config.sync_flushes[1].empty_stored_blocks);
+
+    const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
+    defer std.testing.allocator.free(reproduced);
+    try std.testing.expectEqualSlices(u8, target, reproduced);
+}
+
+test "fingerprintConfigured returns null for ordinary registered zlib stream" {
+    const raw = "ordinary stream without explicit flush finish";
+    const target = try encoder.encodeZlibLevel6(std.testing.allocator, raw);
+    defer std.testing.allocator.free(target);
+
+    const result = try fingerprintConfigured(std.testing.allocator, raw, target);
+    try std.testing.expect(result == null);
 }
 
 test "identify: round-trip via Zig API matches the FFI path" {

@@ -291,8 +291,11 @@ Current probe check:
 
 ## Outstanding gaps to close
 
-1. **Generalize the probe-only worksheet clusters into abstract configs** and
-   decide when they are mature enough for stable fingerprint IDs.
+1. **Continue generalizing probe-only worksheet clusters into abstract configs**:
+   core `fingerprintConfigured` now recovers target-derived flush/finish
+   configs generically, but the candidate sweep still needs broader producer
+   coverage and a stable serialized config format before becoming the public
+   `fingerprint` API.
 2. **Validate the exact CPI worksheet hypotheses on more producer/version corpora**:
    Cluster A: `chain=16 nice=35 insert=4` covers CPI sheets 1/2/4. Cluster B:
    `chain=16 nice=60 insert=4` covers CPI sheets 3/5. Cluster C:
@@ -323,6 +326,20 @@ Current probe check:
    promote only byte-exact generic configs into the registry. Near-matches stay
    as evidence and future work; difz is a downstream residual fallback, not a
    substitute for finding the real fingerprint.
+
+## Latest sanitized private-corpus signal (2026-05-25 EDT)
+
+- Added a blar-style split between committed public fixtures and gitignored
+  `tests/corpus/corpus_local/` / private corpora, plus a tested NAS sampler
+  with atomic inventory caching under `.dfp-private/`.
+- Small private NAS sample, ZIP probe aggregate results only:
+  - 3 `.xlsx`: 488 DEFLATE streams, 325 registry hits, 63 configured exact hits,
+    100 misses, 79.5% exact coverage.
+  - 1 `.docx`: 18/18 registry hits, 100.0% exact coverage.
+  - 2 `.pptx`: 302 DEFLATE streams, 220 registry hits, 79 configured exact
+    hits, 3 misses, 99.0% exact coverage.
+  - 3 EPUBs: 160 DEFLATE streams, 159 registry hits, 1 miss, 99.4% exact
+    coverage.
 
 ## Recent commit log (most recent first)
 

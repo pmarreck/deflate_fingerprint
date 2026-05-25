@@ -37,6 +37,7 @@ const Stats = struct {
     entries_deflate: usize = 0,
     entries_inflate_failed: usize = 0,
     entries_identified: usize = 0,
+    entries_configured_identified: usize = 0,
     entries_missed: usize = 0,
     excel_experimental_attempted: usize = 0,
     excel_experimental_exact_any: usize = 0,
@@ -56,6 +57,7 @@ const Stats = struct {
         try writer.print("  DEFLATE:          {d}\n", .{self.entries_deflate});
         try writer.print("    inflate failed: {d}\n", .{self.entries_inflate_failed});
         try writer.print("    identified:     {d}\n", .{self.entries_identified});
+        try writer.print("    configured:     {d}\n", .{self.entries_configured_identified});
         try writer.print("    missed:         {d}\n", .{self.entries_missed});
         if (self.excel_experimental_attempted != 0) {
             try writer.print("\nExperimental Excel worksheet candidates:\n", .{});
@@ -69,7 +71,8 @@ const Stats = struct {
         if (self.entries_deflate > 0) {
             const attempted = self.entries_deflate - self.entries_inflate_failed;
             if (attempted > 0) {
-                const pct: f64 = @as(f64, @floatFromInt(self.entries_identified)) /
+                const total_exact = self.entries_identified + self.entries_configured_identified;
+                const pct: f64 = @as(f64, @floatFromInt(total_exact)) /
                     @as(f64, @floatFromInt(attempted)) * 100.0;
                 try writer.print("\nHit rate (excluding inflate failures): {d:.1}%\n", .{pct});
             }
@@ -545,10 +548,15 @@ fn processDeflateEntry(
             }
             std.debug.print(")\n", .{});
         }
-    } else {
-        stats.entries_missed += 1;
+        return;
+    }
+
+    if (try dfp.fingerprintConfigured(allocator, original, compressed)) |configured| {
+        var owned = configured;
+        defer owned.deinit(allocator);
+        stats.entries_configured_identified += 1;
         if (verbose) {
-            std.debug.print("    miss {s} ({d}B in, {d}B compressed", .{
+            std.debug.print("    config-hit {s} ({d}B in, {d}B compressed", .{
                 entry_name, original.len, compressed.len,
             });
             if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
@@ -558,9 +566,28 @@ fn processDeflateEntry(
                     excel_experimental_first_diff,
                 });
             }
-            std.debug.print(")\n", .{});
-            printBlockSummary(allocator, compressed);
+            std.debug.print(", memLevel={d}, flushes={d})\n", .{
+                owned.config.mem_level,
+                owned.config.sync_flushes.len,
+            });
         }
+        return;
+    }
+
+    stats.entries_missed += 1;
+    if (verbose) {
+        std.debug.print("    miss {s} ({d}B in, {d}B compressed", .{
+            entry_name, original.len, compressed.len,
+        });
+        if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
+            std.debug.print(", excel-experimental={s} len={d} first_diff={d}", .{
+                excel_experimental_label,
+                excel_experimental_len,
+                excel_experimental_first_diff,
+            });
+        }
+        std.debug.print(")\n", .{});
+        printBlockSummary(allocator, compressed);
     }
 }
 

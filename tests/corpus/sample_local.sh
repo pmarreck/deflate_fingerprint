@@ -33,10 +33,10 @@ printf 'fake zip' > "$NAS/Other/archive.zip"
 
 capture_cmd help "$SAMPLER" --help
 rc=$?
-if [[ "$rc" -eq 0 ]] && grep -q -- "--dest-root" "$TMP_ROOT/help.out"; then
+if [[ "$rc" -eq 0 ]] && grep -q -- "--dest-root" "$TMP_ROOT/help.out" && grep -q -- "--inventory" "$TMP_ROOT/help.out"; then
 	pass
 else
-	fail "help should document --dest-root"
+	fail "help should document --dest-root and --inventory"
 fi
 if [[ -s "$TMP_ROOT/help.err" ]]; then
 	fail "help should not write stderr"
@@ -82,6 +82,23 @@ if [[ -s "$TMP_ROOT/copy.err" ]]; then
 	fail "copy mode should not write stderr"
 else
 	pass
+fi
+
+INV="$TMP_ROOT/private-inventory.txt"
+DEST2="$TMP_ROOT/corpus from inventory"
+capture_cmd inventory "$SAMPLER" --nas-root "$NAS" --dest-root "$DEST2" --inventory "$INV" --n 1 --seed 7
+rc=$?
+xlsx_count=$(find "$DEST2/xlsx/wild" -type f 2>/dev/null | wc -l | awk '{print $1}')
+zip_count=$(find "$DEST2/zip/wild" -type f 2>/dev/null | wc -l | awk '{print $1}')
+if [[ "$rc" -eq 0 && -s "$INV" && "$xlsx_count" -eq 1 && "$zip_count" -eq 1 ]]; then
+	pass
+else
+	fail "inventory mode should scan once and sample multiple formats"
+fi
+if grep -q "archive.zip" "$INV" && grep -q "budget one.xlsx\\|budget two.xlsx" "$INV"; then
+	pass
+else
+	fail "inventory should contain matching candidate paths"
 fi
 
 echo "$PASS passed, $FAIL failed"

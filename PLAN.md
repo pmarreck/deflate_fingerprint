@@ -39,6 +39,7 @@
 - [x] Move worksheet/producer-specific reproduction details out of the core encoder path: `src/encoder.zig` now exposes abstract `DeflateReproductionConfig` with generic sync-flush schedules, while Excel/worksheet inference lives in probes/tests (2026-05-25 11:24 EDT)
 - [x] Expose explicit config-driven compression through the C FFI via `dfp_encode_configured`, including `FlushEvent` schedules and LZ77/memLevel/tokenization settings (2026-05-25 11:31 EDT)
 - [x] Generalize sync-flush topology to per-offset `FlushEvent` counts and add deterministic target-derived `observeFlushSchedule()` extraction; local worksheet probe now captures 7/8 worksheet entries exactly, including Excel 14 sample via observed final-flush-only schedule + L1/mem7 (2026-05-25 12:06 EDT)
+- [x] Add core `fingerprintConfigured` API for target-derived generic flush/finish configs and count configured exact hits separately in ZIP corpus probes; private sampled results: xlsx 79.5%, docx 100%, pptx 99.0%, epub 99.4% (2026-05-25 14:20 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports
@@ -55,7 +56,7 @@
 
 ## Corpus / Fingerprint Pipeline
 
-- [x] Mirror blar's public-vs-local corpus safety model: committed public fixtures, gitignored local/private NAS samples, and documented promotion rules (2026-05-25 13:10 EDT)
+- [x] Mirror blar's public-vs-local corpus safety model: committed public fixtures, gitignored local/private NAS samples, documented promotion rules, and a tested local sampler with inventory caching (2026-05-25 13:10 EDT)
 - [ ] Define a source manifest format for corpus streams: source file path/URL, container type, entry/object path, raw length, compressed length, wrapper/container metadata, known producer, and expected reproduction config/fingerprint if known
 - [ ] Build generator-oracle fixtures for known encoders before reverse-engineering: zlib versions, libdeflate, 7-Zip, miniz, Go flate, .NET DeflateStream, Java `java.util.zip`, Apple/CoreFoundation, Info-ZIP/PKZIP/gzip where practical
 - [ ] For each generator oracle, produce the same seeded input set across all exposed levels/strategies/window/mem settings, then record raw DEFLATE bytes and observed block/flush/token summaries
