@@ -35,7 +35,7 @@
 - [x] Fix chunked token-only block helpers so cross-block match references reconstruct from the full raw stream before per-block STORED fallback decisions; added regression test and verified CPI `.xlsx` verbose probe no longer crashes (2026-05-25 09:10 EDT)
 - [x] Add worksheet-specific Excel candidate encoders and `excel-candidate-probe`; initial CPI candidate (`chain=16 nice=28 insert=4`, memLevel=7, sheetData flushes) matched the prefix block and first 10,529 compressed bytes but was still not byte-exact (2026-05-25 09:45 EDT)
 - [x] Add token-level DEFLATE trace inspection and use it to resolve the CPI sheet2 divergence: the first miss was a too-low `nice_match` early exit; segmented `chain=16 nice=35 insert=4`, memLevel=7, with sheetData sync flushes reproduces the CPI worksheet stream byte-exact (2026-05-25 10:35 EDT)
-- [x] Add `zip-corpus-probe --excel-experimental` to count unregistered worksheet candidate coverage across OOXML corpora; local `/tmp/dfp_xlsx_probe_dir` result: 3/8 worksheet XML entries exact under `chain=16 nice=35 insert=4`, all from the Excel 16 CPI workbook (2026-05-25 10:55 EDT)
+- [x] Add `zip-corpus-probe --excel-experimental` to count unregistered worksheet candidate coverage across OOXML corpora; local `/tmp/dfp_xlsx_probe_dir` result: 5/8 worksheet XML entries exact across two Excel 16 CPI clusters (`nice=35`: sheets 1/2/4, `nice=60`: sheets 3/5) (2026-05-25 11:25 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports

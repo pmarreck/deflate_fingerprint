@@ -39,7 +39,9 @@ const Stats = struct {
     entries_identified: usize = 0,
     entries_missed: usize = 0,
     excel_experimental_attempted: usize = 0,
-    excel_experimental_exact: usize = 0,
+    excel_experimental_exact_any: usize = 0,
+    excel_experimental_exact_nice35: usize = 0,
+    excel_experimental_exact_nice60: usize = 0,
     hits_per_fp: [256]usize = [_]usize{0} ** 256,
 
     fn print(self: Stats, writer: anytype) !void {
@@ -54,9 +56,11 @@ const Stats = struct {
         try writer.print("    identified:     {d}\n", .{self.entries_identified});
         try writer.print("    missed:         {d}\n", .{self.entries_missed});
         if (self.excel_experimental_attempted != 0) {
-            try writer.print("\nExperimental Excel worksheet candidate:\n", .{});
+            try writer.print("\nExperimental Excel worksheet candidates:\n", .{});
             try writer.print("  attempted:        {d}\n", .{self.excel_experimental_attempted});
-            try writer.print("  byte-exact:       {d}\n", .{self.excel_experimental_exact});
+            try writer.print("  byte-exact any:   {d}\n", .{self.excel_experimental_exact_any});
+            try writer.print("  nice=35 exact:    {d}\n", .{self.excel_experimental_exact_nice35});
+            try writer.print("  nice=60 exact:    {d}\n", .{self.excel_experimental_exact_nice60});
         }
         if (self.entries_deflate > 0) {
             const attempted = self.entries_deflate - self.entries_inflate_failed;
@@ -287,18 +291,36 @@ fn processDeflateEntry(
     };
     defer allocator.free(original);
 
-    var excel_experimental_exact = false;
+    var excel_experimental_label: []const u8 = "none";
     var excel_experimental_len: usize = 0;
     var excel_experimental_first_diff: usize = 0;
     if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
         stats.excel_experimental_attempted += 1;
-        const got = dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, original, 16, 35, 4) catch null;
-        if (got) |candidate| {
+
+        const got35 = dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, original, 16, 35, 4) catch null;
+        if (got35) |candidate| {
             defer allocator.free(candidate);
             excel_experimental_len = candidate.len;
             excel_experimental_first_diff = firstDiff(candidate, compressed);
-            excel_experimental_exact = std.mem.eql(u8, candidate, compressed);
-            if (excel_experimental_exact) stats.excel_experimental_exact += 1;
+            if (std.mem.eql(u8, candidate, compressed)) {
+                excel_experimental_label = "nice35";
+                stats.excel_experimental_exact_any += 1;
+                stats.excel_experimental_exact_nice35 += 1;
+            }
+        }
+
+        if (std.mem.eql(u8, excel_experimental_label, "none")) {
+            const got60 = dfp.encoder.encodeExcelWorksheetOPCMem7FastParams(allocator, original, 16, 60, 4) catch null;
+            if (got60) |candidate| {
+                defer allocator.free(candidate);
+                excel_experimental_len = candidate.len;
+                excel_experimental_first_diff = firstDiff(candidate, compressed);
+                if (std.mem.eql(u8, candidate, compressed)) {
+                    excel_experimental_label = "nice60";
+                    stats.excel_experimental_exact_any += 1;
+                    stats.excel_experimental_exact_nice60 += 1;
+                }
+            }
         }
     }
 
@@ -317,8 +339,8 @@ fn processDeflateEntry(
                 result.fingerprint_id, entry_name, original.len, compressed.len,
             });
             if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
-                std.debug.print(", excel-experimental={} len={d} first_diff={d}", .{
-                    excel_experimental_exact,
+                std.debug.print(", excel-experimental={s} len={d} first_diff={d}", .{
+                    excel_experimental_label,
                     excel_experimental_len,
                     excel_experimental_first_diff,
                 });
@@ -332,8 +354,8 @@ fn processDeflateEntry(
                 entry_name, original.len, compressed.len,
             });
             if (excel_experimental and dfp.ooxml.isWorksheetPath(entry_name)) {
-                std.debug.print(", excel-experimental={} len={d} first_diff={d}", .{
-                    excel_experimental_exact,
+                std.debug.print(", excel-experimental={s} len={d} first_diff={d}", .{
+                    excel_experimental_label,
                     excel_experimental_len,
                     excel_experimental_first_diff,
                 });
@@ -384,9 +406,9 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
                 \\Reports aggregate stats: how many streams were identified by which
                 \\fingerprint, how many were missed, etc.
                 \\
-                \\--excel-experimental additionally tests the current unregistered
-                \\Excel worksheet hypothesis: memLevel=7, chain=16, nice=35,
-                \\insert=4, segmented at sheetData sync-flush boundaries.
+                \\--excel-experimental additionally tests current unregistered
+                \\Excel worksheet hypotheses: memLevel=7, chain=16, insert=4,
+                \\nice=35 and nice=60, segmented at sheetData sync-flush boundaries.
                 \\
                 \\
             , .{});

@@ -201,10 +201,12 @@ Updated hypothesis:
   `/tmp/dfp_excel_probe/sheet2_orig.bin`. Its token stream is identical to the
   target. Prefix-history mode with the same params is not exact.
 - `zip-corpus-probe --excel-experimental /tmp/dfp_xlsx_probe_dir --verbose`
-  currently reports 3/8 worksheet XML entries exact for this candidate:
-  CPI `sheet1.xml`, `sheet2.xml`, and `sheet4.xml`. CPI `sheet3.xml`,
-  `sheet5.xml`, and `sheet6.xml` are not exact (`first_diff` 657, 968, and 2).
-  LibreOffice `scorely` and Excel 14 sample worksheet entries are not exact.
+  currently reports 5/8 worksheet XML entries exact across two unregistered
+  CPI clusters:
+  - `nice=35`: CPI `sheet1.xml`, `sheet2.xml`, `sheet4.xml`
+  - `nice=60`: CPI `sheet3.xml`, `sheet5.xml`
+  - unresolved: CPI `sheet6.xml`; LibreOffice `scorely` and Excel 14 sample
+    worksheet entries are not exact.
   This supports Peter's concern: Office worksheet behavior should be clustered
   by byte-reproduction behavior, not labeled as one universal Excel encoder.
 - Follow-up parameter checks on extracted CPI false negatives:
