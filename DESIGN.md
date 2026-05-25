@@ -70,7 +70,7 @@ The DEFLATE spec leaves these encoder choices free; they cascade deterministical
 | Match-length tie-breaking | When two matches are tied for length, which to prefer (closer? further? first-found?). Encoder-specific. |
 | Huffman tree construction (for dynamic blocks) | Multiple valid Huffman trees encode the same symbol frequencies. Encoders use slightly different tree-building algorithms (canonical Huffman with various tie-breakers). |
 | Empty-block / final-block-flag handling | Minor but observable. |
-| Pre-deflate filtering (PNG-specific: row filters) | Out of DEFLATE's scope but observable when fingerprinting PNG IDAT chunks. |
+| Pre-deflate filtering (PNG-specific: row filters) | Outside RFC 1951, but required adapter metadata for bit-exact PNG round-tripping and for explaining what bytes were fed into DEFLATE. |
 
 Most of these cascade from `(encoder_id, level, strategy, memLevel, window_bits)`. Once you fix that tuple, the encoder is deterministic.
 
@@ -239,14 +239,14 @@ Property-based fuzz: random input bytes + random fingerprint → encode → deco
 
 ### Mecha Archiver
 
-`deflate_fingerprint` is the byte-identity backstop for ZIP-based formats. Workflow on archive-create:
+`deflate_fingerprint` is the byte-identity backstop for DEFLATE-bearing formats. Workflow on archive-create:
 
 1. blar's codec expands a `.docx` / `.xlsx` / `.epub` / `.zip` etc. — gets the inner entries.
 2. For each inner entry's original DEFLATE bytes, call `dfp_identify(raw, target)`.
 3. If matched: store `fingerprint_id` (1-2 bytes) + raw inner content. Recompression on extract uses our parameterized encoder with that fingerprint → byte-identical inner ZIP entries → byte-identical outer `.docx`.
 4. If unmatched: fall back to difz patch, or content-identical-with-disclosure.
 
-This makes Mecha Archiver's "byte-identical roundtrip for ZIP-based formats" claim cryptographically credible.
+This makes Mecha Archiver's "byte-identical roundtrip for DEFLATE-bearing formats" claim cryptographically credible.
 
 ### Forensics CLI workflow
 
@@ -255,6 +255,7 @@ This makes Mecha Archiver's "byte-identical roundtrip for ZIP-based formats" cla
 - "This `.docx` was produced by Microsoft Word, not LibreOffice" (or vice versa)
 - "This `.jar` was repacked by an unusual tool inconsistent with the claimed build environment"
 - "This `.epub` shows a mix of encoders, suggesting post-publication modification"
+- "This `.whl` / `.apk` / `.xpi` / `.vsix` / `.odt` is a ZIP container whose individual entries point to different producer tools"
 
 ## Open design questions (for the next LLM to investigate)
 
@@ -268,11 +269,13 @@ This makes Mecha Archiver's "byte-identical roundtrip for ZIP-based formats" cla
 
 5. **Adversarial inputs / fingerprint forgery.** Could a malicious actor produce a DEFLATE stream that matches multiple fingerprints, or matches a fingerprint other than its true producer? Probably yes (DEFLATE has enough degrees of freedom that crafting tied outputs is feasible). For forensic use, surface this caveat.
 
-6. **PNG IDAT chunks specifically.** PNG's pre-DEFLATE row filter choices interact with what gets fed into DEFLATE. Do we treat the filter choices as part of the fingerprint, or strictly fingerprint the DEFLATE-side only? Probably the latter, with a separate "PNG-side encoder fingerprint" extension if pursued.
+6. **PNG IDAT chunks specifically.** PNG bit-exact reproduction is in scope. The core fingerprint remains DEFLATE-side only, but PNG adapters/tests must capture row filters, IDAT chunking, and CRC-relevant bytes so upstream tools can restore the whole PNG exactly.
 
-7. **gzip header bytes.** gzip's outer envelope (magic, FLG, MTIME, XFL, OS bytes) is not DEFLATE proper, but it's strongly correlated with which encoder produced the gzip stream. Include in the fingerprint? Probably as a *secondary* signal that helps disambiguate when DEFLATE-only attribution is ambiguous.
+7. **PDF FlateDecode and predictor filters.** PDF streams can layer `/FlateDecode` with predictors and object-stream syntax. The DEFLATE payload is core scope; PDF object layout/predictor metadata belongs in adapters/tests but must be captured for whole-file round-trip validation.
 
-8. **Registry distribution and updates.** Ships embedded in the library. How do new fingerprint entries propagate to existing deployed instances of Mecha Archiver and forensic tools? Probably a registry-version-string in the library + opt-in update mechanism.
+8. **gzip header bytes.** gzip's outer envelope (magic, FLG, MTIME, XFL, OS bytes) is not DEFLATE proper, but it's strongly correlated with which encoder produced the gzip stream. Include in the fingerprint? Probably as a *secondary* signal that helps disambiguate when DEFLATE-only attribution is ambiguous.
+
+9. **Registry distribution and updates.** Ships embedded in the library. How do new fingerprint entries propagate to existing deployed instances of Mecha Archiver and forensic tools? Probably a registry-version-string in the library + opt-in update mechanism.
 
 ## Naming convention notes
 

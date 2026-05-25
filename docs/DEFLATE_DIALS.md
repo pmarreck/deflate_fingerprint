@@ -73,10 +73,13 @@ are observable and influence fingerprint matching at the file level.
 | 33 | **ZIP CRC32 placement** | Local header vs. data descriptor (GP flag bit 3). |
 | 34 | **ZIP central directory ordering** | Entries can appear in any order; tools differ. |
 | 35 | **ZIP filename encoding** | CP437 default; UTF-8 with bit 11 of GP flags. |
-| 36 | **PNG IDAT chunking** | Single IDAT vs. multiple chunks; chunk-boundary placement is encoder choice. |
-| 37 | **PNG row filter selection** | None/Sub/Up/Average/Paeth, per row. Pre-DEFLATE, byte-affecting. |
+| 36 | **PNG IDAT chunking** | Single IDAT vs. multiple chunks; chunk-boundary placement is outside RFC 1951 but required metadata for bit-exact whole-PNG restoration. |
+| 37 | **PNG row filter selection** | None/Sub/Up/Average/Paeth, per row. Pre-DEFLATE, byte-affecting, and therefore must be captured by PNG adapters/tests even though the DEFLATE core only sees filtered bytes. |
 | 38 | **EPUB mimetype convention** | First entry MUST be uncompressed `mimetype` per epub spec — affects expected ZIP layout. |
 | 39 | **DOCX/XLSX/PPTX** | Office Open XML — ZIP with specific entry ordering: `[Content_Types].xml` typically first. |
+| 40 | **PDF FlateDecode streams** | PDF stream dictionaries, object streams, predictors, and filters determine which bytes are fed to DEFLATE and how the stream is embedded. Required for corpus extraction and whole-file tests. |
+| 41 | **iWork packages** | `.pages`, `.numbers`, and `.key` files may use ZIP/package internals and Apple encoders. Required corpus target; container details stay adapter-side. |
+| 42 | **ZIP-container aliases** | `.jar`, `.war`, `.ear`, `.apk`, `.ipa`, `.whl`, `.xpi`, `.crx`, `.vsix`, `.odt`, `.ods`, `.odp`, `.cbz`, EPUB, OOXML, and many others are ZIP archives with method=8 entries. They should share the same ZIP DEFLATE walker, with format-specific metadata layered on only when useful. |
 
 ---
 

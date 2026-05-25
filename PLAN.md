@@ -42,7 +42,12 @@
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports
-- [ ] Corpus harvest: collect 1000+ real-world `.docx` / `.xlsx` / `.epub` / `.zip` / `.jar` files from public sources; verify ≥70% hit rate
+- [ ] Corpus harvest: collect 1000+ real-world `.docx` / `.xlsx` / `.pptx` / `.pages` / `.numbers` / `.key` / `.epub` / `.pdf` / `.png` / `.zip` / `.jar` / `.war` / `.ear` / `.apk` / `.ipa` / `.whl` / `.xpi` / `.crx` / `.vsix` / `.odt` / `.ods` / `.odp` / `.cbz` / `.gz` files from public sources; verify ≥70% hit rate
+- [ ] Expand `zip-corpus-probe` extension/classification coverage for the full ZIP-container family: JAR/WAR/EAR, APK, IPA, Python wheels, browser extensions, VSIX, OpenDocument, EPUB, CBZ, OOXML, and plain ZIP
+- [ ] Add development-only generator oracles via `flake.nix` as needed for libdeflate, 7-Zip, miniz, Go flate, .NET DeflateStream, Java `java.util.zip`, Apple/CoreFoundation, and zlib version drift probes
+- [ ] Add PNG IDAT probe: extract concatenated IDAT DEFLATE stream(s), validate DEFLATE reproduction, and record PNG filter/chunk metadata needed by upstream whole-file round-trip tests
+- [ ] Add PDF FlateDecode probe: walk PDF object streams/streams with `/FlateDecode`, extract raw DEFLATE payloads, and preserve object-level metadata for byte-exact integration tests
+- [ ] Add iWork probe: inspect `.pages` / `.numbers` / `.key` package structure and extract embedded DEFLATE streams for the same fingerprint/config path
 - [ ] Garnix CI green on `packages.default` + `checks.test`
 - [ ] Fix `checks.test` zlib link path: direct `nix build .#checks.<system>.test` currently cannot find dynamic library `z`, while `./test` passes through the dev shell
 - [ ] Cross-compile for 5 OS/arch combos (Mac aarch64, Linux aarch64/x86_64, Windows aarch64/x86_64)
@@ -52,6 +57,7 @@
 
 - [ ] Implement libdeflate-quirks behavior tables (12 levels)
 - [ ] Implement 7-Zip DEFLATE behavior tables (5 levels × memLevels)
+- [ ] Land first PNG/PDF/iWork corpus adapters with fixtures and expected reproduction configs
 - [ ] Forensics CLI workflow polish: human-readable encoder report
 - [ ] Aggregate confidence scoring (multi-stream attribution: "all 18 streams in this `.docx` match zlib level=6 → likely produced by Microsoft Office or LibreOffice")
 - [ ] ≥85% hit rate on the corpus
@@ -64,6 +70,7 @@
 - [ ] Apple CoreFoundation DEFLATE (or our reverse-engineered equivalent)
 - [ ] .NET DeflateStream (multi-version: pre-Brotli-team era and post)
 - [ ] java.util.zip verification (likely zlib-derived; confirm on JDK 8/11/17/21)
+- [ ] Expand Office/macOS Office/iWork/EPUB/PDF/PNG/gzip corpus coverage and classify every miss by observed block/flush/token behavior
 - [ ] ≥95% hit rate on the corpus
 - [ ] v0.3.0 release
 
@@ -103,7 +110,9 @@
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
-- [ ] PNG IDAT-specific extension (DEFLATE-level vs filter-level fingerprinting separation)
+- [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
+- [ ] PDF FlateDecode coverage: distinguish DEFLATE reproduction from PDF object/container reconstruction, but test both enough to support blar integration
+- [ ] macOS/iWork coverage: determine whether Pages/Numbers/Keynote use ZIP, protobuf/snappy-like package internals, Apple/CoreFoundation DEFLATE, zlib, or mixed encoders across versions
 - [ ] gzip header bytes as secondary attribution signal
 - [ ] Registry distribution and update mechanism for deployed library instances
 - [ ] Promote probe-only worksheet clusters into stable generic fingerprints only after they are expressed as configurations and validated across multiple producer/version corpora; do not add core functions named after a specific application.

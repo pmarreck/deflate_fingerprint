@@ -304,6 +304,18 @@ Current probe check:
 4. **Re-run probe on Fileserver Books/Downloads** to see broader hit-rate
    improvement from MAX_DIST fix.
 5. Apple Mac installer non-zlib family (separate investigation from earlier).
+6. **Broaden format coverage beyond ZIP/OOXML**:
+   PNG IDAT, PDF FlateDecode, gzip, iWork (`.pages` / `.numbers` / `.key`),
+   and the wider ZIP-container family (`.jar`, `.war`, `.ear`, `.apk`, `.ipa`,
+   `.whl`, `.xpi`, `.crx`, `.vsix`, OpenDocument, EPUB, CBZ, etc.) are all
+   in scope for bit-exact embedded DEFLATE reproduction. Core stays RFC 1951;
+   adapters/tests capture container metadata, PNG filters/chunking, PDF object
+   details, ZIP directories, and other wrapper bytes needed by blar.
+7. **External encoder families are explicit targets**:
+   libdeflate, 7-Zip, miniz, Go `compress/flate`, .NET DeflateStream, Java
+   `java.util.zip`, Apple/CoreFoundation, and zlib version drift. It is OK to
+   add these as development-only `flake.nix` dependencies or platform-SDK
+   probes when implementing their corpus generators.
 
 ## Recent commit log (most recent first)
 

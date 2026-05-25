@@ -28,6 +28,13 @@ Active reverse-engineering / implementation project.
   values with per-offset `FlushEvent` counts derived from the target stream;
   named producer details such as Excel worksheet structure live in probes/tests
   rather than the main encoder.
+- Planned corpus coverage explicitly includes broader Office/iWork documents,
+  EPUB, PDF FlateDecode streams, PNG IDAT streams, gzip, and outputs generated
+  by zlib, libdeflate, 7-Zip, miniz, Go, .NET, Java, and Apple/CoreFoundation.
+- ZIP-container coverage is intentionally broad: `.zip`, `.jar`, `.war`,
+  `.ear`, `.apk`, `.ipa`, `.whl`, `.xpi`, `.crx`, `.vsix`, `.odt`, `.ods`,
+  `.odp`, `.epub`, `.cbz`, and OOXML files should all reuse the same generic
+  method=8 entry walker before any format-specific metadata is layered on.
 
 ## Why it exists
 
@@ -40,6 +47,12 @@ For ZIP-family files, simply inflating each entry and later deflating it again
 is content-preserving but not byte-preserving. That is not good enough for
 users who need exact restoration of original `.docx`, `.xlsx`, `.epub`, `.jar`,
 or `.zip` files.
+
+The same byte-identity requirement applies to PNG IDAT data, PDF FlateDecode
+streams, gzip payloads, iWork packages, and any other embedded RFC 1951 stream.
+Container syntax, PNG filters, PDF object layout, and wrapper bytes are handled
+by format adapters/tests or upstream consumers; the core responsibility here is
+to identify and reproduce the embedded DEFLATE bytes exactly.
 
 The intended archive workflow is:
 
@@ -65,7 +78,11 @@ care about it.
   explicit config-driven compression via `dfp_encode_configured`.
 - Provides a CLI for current raw-stream attribution experiments.
 - Includes a ZIP-family corpus probe that extracts raw DEFLATE entries from
-  `.zip`, `.docx`, `.xlsx`, `.pptx`, `.epub`, `.jar`, `.apk`, and similar files.
+  `.zip`, `.docx`, `.xlsx`, `.pptx`, `.epub`, `.jar`, `.apk`, `.whl`, `.xpi`,
+  `.odt`, `.ods`, `.cbz`, and similar files.
+- Will add corpus probes for PNG, PDF, iWork, gzip, and generator-oracle outputs
+  from external DEFLATE implementations. Those tools may be development-only
+  dependencies supplied by `flake.nix`.
 
 Long-term, this should become a general, highly configurable DEFLATE
 implementation:
