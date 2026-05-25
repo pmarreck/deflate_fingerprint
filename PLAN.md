@@ -32,6 +32,7 @@
 - [x] Add `deflate-block-inspect` dev tool and use it on local CPI `.xlsx` sheet2 stream; observed 8,191-token cadence plus explicit empty stored flush blocks (2026-05-25 00:24 EDT)
 - [x] Add tested zlib memLevel=7 encoding path for levels 1-3, including hash table sizing and 8,191-symbol block chunks with raw-slice-aware STORED fallback (2026-05-25 00:36 EDT)
 - [x] Add OOXML `docProps/app.xml` producer metadata parsing and verbose ZIP-probe reporting for Application/AppVersion clustering (2026-05-25)
+- [x] Fix chunked token-only block helpers so cross-block match references reconstruct from the full raw stream before per-block STORED fallback decisions; added regression test and verified CPI `.xlsx` verbose probe no longer crashes (2026-05-25 09:10 EDT)
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
 - [x] C CLI foundation (`cli/main.c`): `identify --raw --target [--json]`, `--help`, `--about`
 - [ ] C CLI completion (`cli/main.c`): `reproduce`, `list`, richer reports

@@ -1,18 +1,19 @@
 # Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
 ver=1.2
-depth=3
+depth=2
+max_lines=80
 
 annotate=[
 	LEARNINGS.md = Session learnings and environment/build observations worth preserving.
 	README.md = Public overview: current status, blar/difz role, build commands, CLI surface.
-	SESSION_RESUME.md = Live handoff for MAX_DIST fix and active Excel sheet2 large-entry investigation.
+	SESSION_RESUME.md = Live handoff for Excel large-entry investigation, memLevel=7 evidence, and current probe/fix status.
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
 	docs/DEFLATE_DIALS.md = Catalog of DEFLATE dials that create valid but byte-distinct streams.
 	docs/ENCODER_NOTES.md = Append-only empirical findings by encoder/probe; confirmed behavior lives here.
-	docs/V0.1_STATUS.md = Current v0.1 checkpoint: 28 fingerprints, 96 tests, real-world corpus notes, active gaps.
+	docs/V0.1_STATUS.md = Current v0.1 checkpoint: 28 fingerprints, 105 tests, Excel/OOXML producer variance and large-entry gaps.
 	include/deflate_fingerprint.h = Public C FFI header for non-Zig callers including blar.
 	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.
-	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, multi-block dispatch helpers.
+	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, raw-slice-aware multi-block dispatch helpers.
 	src/encoder.zig = Top-level fingerprint encoders: zlib variants plus Office OPC flush/finish behavior.
 	src/fidelity.zig = Test-only real-zlib oracle via @cImport(zlib.h) for byte-exact fidelity checks.
 	src/huffman.zig = zlib-compatible Huffman tree builder, canonical codes, and code-length RLE.
@@ -21,5 +22,5 @@ annotate=[
 	src/match.zig = zlib-style LZ77 tokenizers, longestMatch, and zlib MAX_DIST behavior.
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
-	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, inflates with libz, identifies fingerprints.
+	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, and miss block shapes.
 ]

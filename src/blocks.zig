@@ -357,14 +357,26 @@ pub fn emitBlockFromTokensInto(
     tokens: []const Token,
     bfinal: u1,
 ) !void {
+    const raw = try reconstructFromTokens(allocator, tokens);
+    defer allocator.free(raw);
+    return emitBlockFromTokensIntoRaw(bw, tokens, raw, bfinal);
+}
+
+/// Emit one 2-way STORED/FIXED block while using caller-provided raw bytes for
+/// STORED fallback; needed when a token slice has matches into earlier blocks.
+pub fn emitBlockFromTokensIntoRaw(
+    bw: *BitWriter,
+    tokens: []const Token,
+    raw: []const u8,
+    bfinal: u1,
+) !void {
     const static_len_bits: u32 = staticTokenBitsCost(tokens) + 7;
     const static_lenb: u32 = (static_len_bits + 3 + 7) >> 3;
     const raw_len: u32 = @intCast(tokenStreamRawLen(tokens));
+    std.debug.assert(raw.len == raw_len);
     const stored_est: u32 = raw_len + 4;
 
     if (stored_est <= static_lenb) {
-        const raw = try reconstructFromTokens(allocator, tokens);
-        defer allocator.free(raw);
         std.debug.assert(raw.len <= 0xFFFF);
         try emitStoredBlock(bw, raw, bfinal);
         return;
@@ -394,6 +406,8 @@ pub fn emitBlockFromTokensWithDynamicInto(
     return emitBlockFromTokensWithDynamicIntoRaw(bw, allocator, tokens, raw, bfinal);
 }
 
+/// Emit one 3-way STORED/FIXED/DYNAMIC block while using caller-provided raw
+/// bytes for STORED fallback; avoids invalid local reconstruction at chunk boundaries.
 pub fn emitBlockFromTokensWithDynamicIntoRaw(
     bw: *BitWriter,
     allocator: std.mem.Allocator,
@@ -459,24 +473,13 @@ pub fn encodeMultiBlock3WayChunked(
     tokens: []const Token,
     chunk_symbols: usize,
 ) ![]u8 {
-    var bw = BitWriter.init(allocator);
-    errdefer bw.deinit();
-
-    if (tokens.len == 0) {
-        try emitFixedHuffmanFromTokensBlock(&bw, tokens, 1);
-        return bw.toOwnedSlice();
-    }
-
-    var i: usize = 0;
-    while (i < tokens.len) {
-        const end = @min(i + chunk_symbols, tokens.len);
-        const is_last: u1 = if (end == tokens.len) 1 else 0;
-        try emitBlockFromTokensWithDynamicInto(&bw, allocator, tokens[i..end], is_last);
-        i = end;
-    }
-    return bw.toOwnedSlice();
+    const raw = try reconstructFromTokens(allocator, tokens);
+    defer allocator.free(raw);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, chunk_symbols);
 }
 
+/// Raw-aware multi-block 3-way dispatcher. `raw` supplies the exact byte slice
+/// for each token chunk so matches may legally refer to prior chunks.
 pub fn encodeMultiBlock3WayChunkedFromRaw(
     allocator: std.mem.Allocator,
     tokens: []const Token,
@@ -516,6 +519,19 @@ pub fn encodeMultiBlock2WayChunked(
     tokens: []const Token,
     chunk_symbols: usize,
 ) ![]u8 {
+    const raw = try reconstructFromTokens(allocator, tokens);
+    defer allocator.free(raw);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, chunk_symbols);
+}
+
+/// Raw-aware multi-block 2-way dispatcher for Z_FIXED fingerprints. `raw`
+/// supplies STORED candidates when chunk-local token reconstruction is invalid.
+pub fn encodeMultiBlock2WayChunkedFromRaw(
+    allocator: std.mem.Allocator,
+    tokens: []const Token,
+    raw: []const u8,
+    chunk_symbols: usize,
+) ![]u8 {
     var bw = BitWriter.init(allocator);
     errdefer bw.deinit();
 
@@ -525,11 +541,32 @@ pub fn encodeMultiBlock2WayChunked(
     }
 
     var i: usize = 0;
+    var raw_pos: usize = 0;
     while (i < tokens.len) {
         const end = @min(i + chunk_symbols, tokens.len);
+        const raw_end = raw_pos + tokenStreamRawLen(tokens[i..end]);
         const is_last: u1 = if (end == tokens.len) 1 else 0;
-        try emitBlockFromTokensInto(&bw, allocator, tokens[i..end], is_last);
+        try emitBlockFromTokensIntoRaw(&bw, tokens[i..end], raw[raw_pos..raw_end], is_last);
+        raw_pos = raw_end;
         i = end;
     }
+    std.debug.assert(raw_pos == raw.len);
     return bw.toOwnedSlice();
+}
+
+test "token-only multi-block helpers tolerate cross-chunk match references" {
+    const tokens = [_]Token{
+        .{ .literal = 'A' },
+        .{ .literal = 'B' },
+        .{ .literal = 'C' },
+        .{ .match = .{ .length = 3, .distance = 3 } },
+    };
+
+    const dynamic = try encodeMultiBlock3WayChunked(std.testing.allocator, &tokens, 3);
+    defer std.testing.allocator.free(dynamic);
+    try std.testing.expect(dynamic.len > 0);
+
+    const fixed = try encodeMultiBlock2WayChunked(std.testing.allocator, &tokens, 3);
+    defer std.testing.allocator.free(fixed);
+    try std.testing.expect(fixed.len > 0);
 }

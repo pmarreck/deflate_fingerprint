@@ -149,6 +149,24 @@ fn extractEntryOriginal(
     return error.UnsupportedMethod;
 }
 
+/// Print a compact DEFLATE block-shape sketch for missed streams so OOXML and
+/// ZIP-family producer clusters can be compared by flush cadence and block type.
+fn printBlockSummary(allocator: std.mem.Allocator, compressed: []const u8) void {
+    const blocks = dfp.inspect.inspectBlocks(allocator, compressed) catch |err| {
+        std.debug.print("      blocks: inspect-failed({s})\n", .{@errorName(err)});
+        return;
+    };
+    defer allocator.free(blocks);
+
+    std.debug.print("      blocks:", .{});
+    const limit = @min(blocks.len, 8);
+    for (blocks[0..limit]) |block| {
+        std.debug.print(" {s}:{d}", .{ @tagName(block.block_type), block.token_count });
+    }
+    if (blocks.len > limit) std.debug.print(" ...+{d}", .{blocks.len - limit});
+    std.debug.print("\n", .{});
+}
+
 /// Process one ZIP-format archive in memory.
 fn processArchive(
     allocator: std.mem.Allocator,
@@ -269,6 +287,7 @@ fn processDeflateEntry(
             std.debug.print("    miss ({d}B in, {d}B compressed)\n", .{
                 original.len, compressed.len,
             });
+            printBlockSummary(allocator, compressed);
         }
     }
 }

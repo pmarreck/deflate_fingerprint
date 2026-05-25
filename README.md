@@ -17,7 +17,7 @@ Active reverse-engineering / implementation project.
 - 28 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
   fixed / filtered strategies, collapsed zlib HUFFMAN_ONLY and RLE fingerprints,
   plus Microsoft OOXML / Java `DeflaterOutputStream` OPC-style flush handling.
-- `./test` currently passes 104 tests: Zig unit tests, CLI integration tests,
+- `./test` currently passes 105 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
@@ -25,7 +25,8 @@ Active reverse-engineering / implementation project.
   recorded in [SESSION_RESUME.md](SESSION_RESUME.md).
 - Active research target: large Microsoft Excel `.xlsx` worksheet entries whose
   small OPC siblings match zlib L1 + flush/finish, but whose large streams do
-  not match any standard zlib level.
+  not match any standard zlib level. Current probes report OOXML producer
+  metadata and DEFLATE block-shape summaries for these misses.
 
 ## Why it exists
 

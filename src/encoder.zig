@@ -71,6 +71,7 @@ const encodeMultiBlock3Way = blocks.encodeMultiBlock3Way;
 const encodeMultiBlock2Way = blocks.encodeMultiBlock2Way;
 const encodeMultiBlock3WayChunked = blocks.encodeMultiBlock3WayChunked;
 const encodeMultiBlock3WayChunkedFromRaw = blocks.encodeMultiBlock3WayChunkedFromRaw;
+const encodeMultiBlock2WayChunkedFromRaw = blocks.encodeMultiBlock2WayChunkedFromRaw;
 const chunkSymbolsForMemLevel = blocks.chunkSymbolsForMemLevel;
 
 /// Encode `raw` as a single DEFLATE block with BFINAL=1, BTYPE=01 (fixed
@@ -660,7 +661,7 @@ test "encodeZlibHuffmanOnly: alternating 'A'/0xFF * 14 -> DYNAMIC branch" {
 pub fn encodeZlibLevel1(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 fn encodeZlibFastMemLevel(
@@ -826,25 +827,25 @@ test "encodeZlibLevel2/3Mem7 match real zlib with memLevel=7 on multi-block inpu
 pub fn encodeZlibLevel2(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_2);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel3(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_3);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel4(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_4);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel5(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_5);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 /// zlib level=6 DEFAULT_STRATEGY: lazy LZ77 (chain depth 128, lazy threshold 16)
@@ -852,26 +853,26 @@ pub fn encodeZlibLevel5(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 pub fn encodeZlibLevel6(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_7);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel8(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_8);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 /// zlib level=9: deepest chain (4096), lazy threshold 258 (always lazy).
 pub fn encodeZlibLevel9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_9);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 // ─── Z_FILTERED strategy: reject matches with length <= 5 (deflate_slow). ──
@@ -879,37 +880,37 @@ pub fn encodeZlibLevel9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
 pub fn encodeZlibLevel4Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_4_FILTERED);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel5Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_5_FILTERED);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel6Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6_FILTERED);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel7Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_7_FILTERED);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel8Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_8_FILTERED);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel9Filtered(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_9_FILTERED);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 
@@ -921,7 +922,7 @@ pub fn encodeZlibLevel9Filtered(allocator: std.mem.Allocator, raw: []const u8) !
 pub fn encodeZlibRLE(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeRLE(allocator, raw);
     defer allocator.free(tokens);
-    return encodeMultiBlock3Way(allocator, tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 // ─── Microsoft OOXML / Office OPC encoder ─────────────────────────────────
@@ -1004,55 +1005,55 @@ test "encodeZlibLevel6: 'longish' input matches zlib L6 byte-exact (DIAGNOSTIC)"
 pub fn encodeZlibLevel1Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_1);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel2Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_2);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel3Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77Tokenize(allocator, raw, LZ77_LEVEL_3);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel4Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_4);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel5Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_5);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel6Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel7Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_7);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel8Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_8);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 pub fn encodeZlibLevel9Fixed(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_9);
     defer allocator.free(tokens);
-    return encodeMultiBlock2Way(allocator, tokens);
+    return encodeMultiBlock2WayChunkedFromRaw(allocator, tokens, raw, blocks.MULTI_BLOCK_CHUNK_SYMBOLS);
 }
 
 test "encodeZlibLevel1Fixed: 80B prose matches zlib Z_FIXED byte-exact" {

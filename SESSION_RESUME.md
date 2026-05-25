@@ -1,4 +1,4 @@
-# Session Resume Notes — 2026-05-24
+# Session Resume Notes — 2026-05-25
 
 This file captures all live context after an upstream Anthropic false-positive
 AUP block hit a benign compression-algorithm-analysis request. Written to
@@ -11,7 +11,7 @@ compressed byte stream by reproducing the exact byte stream from the
 uncompressed input. Downstream consumer: `../blar` (archive format that
 needs byte-identical reconstruction of embedded compressed streams).
 
-## Current state (HEAD = qnqwxlrm 724f3a63)
+## Current state (parent = mrzxkyku 52d33aae)
 
 - 28 fingerprints registered (zlib L0-L9 × default/HUFFMAN_ONLY/RLE/FIXED/FILTERED
   + Microsoft OOXML / Office OPC).
@@ -21,18 +21,21 @@ needs byte-identical reconstruction of embedded compressed streams).
   - Fileserver Books / 100 ePubs (13,761):  73.4%
   - Fileserver Downloads (6,091):           85.7%
   - Fileserver Documents / 2 .xlsx (516):   66.1% with fingerprint #28
-- 96 unit tests green; 5-module architecture (bitstream/huffman/match/blocks/encoder).
+- 105 full-suite tests green; current module architecture includes
+  bitstream/huffman/match/blocks/encoder/fidelity/inspect/ooxml/lib.
 - `tools/zip_corpus_probe.zig` walks ZIP archives, extracts DEFLATE entries,
-  reports per-fingerprint hits. Build via `zig build probe-install`.
+  reports per-fingerprint hits, and in verbose mode prints OOXML producer
+  metadata plus compact block summaries for misses. Build via
+  `nix develop -c zig build probe-install`.
 
-## What we just landed (uncommitted)
+## Recently landed
 
 **`src/match.zig` MAX_DIST fix.** zlib uses `MAX_DIST = window_size - MIN_LOOKAHEAD = 32768 - 262 = 32506`,
 not `window_size = 32768`. On inputs >32KB our LZ77 was accepting matches with
 distance 32506-32768 that zlib rejects via `slide_hash`, causing token-stream
 divergence.
 
-Changes already applied:
+Changes applied and committed:
 - Added `inline fn maxDist(params)` helper returning `params.window_size - (max_match + min_match + 1)`.
 - `lz77Tokenize`: changed `<= params.window_size` to `<= maxDist(params)`.
 - `lz77TokenizeSlow`: same change.
@@ -76,26 +79,21 @@ Excel `.xlsx` `xl/worksheets/sheet2.xml` entry:
 
 ## Specific next experiment to run
 
-Bit-decode Excel sheet2's first multi-block boundary to figure out:
-- Where does Excel's block 1 end?
-- Block size in tokens vs bytes
-- Does Excel emit BFINAL=0 between data blocks (multi-block) or just at end?
+The first block-boundary question is answered for the CPI workbook: large
+worksheet streams use an 8,191-token cadence with explicit empty STORED flush
+markers. The next experiment should compare candidate encoders against that
+shape rather than only against final byte size:
 
-If Excel multi-blocks at a different threshold than 16383 symbols, that explains
-both the smaller-than-L1 output AND the divergence.
+- Simulate zlib memLevel=7 with level-2/level-3-adjacent fast parameters.
+- Preserve the observed sync-flush cut points around worksheet XML structure
+  (`<sheetData>` start/end).
+- Compare first divergence by token stream and block boundary, not just total
+  compressed size.
 
-Tools / fixtures already on disk:
-- `/tmp/excel_analysis/sheet2_comp.bin` — Excel's compressed sheet2 (52876B)
-- `/tmp/excel_analysis/sheet2_orig.bin` — original sheet2 (279493B)
-- `/tmp/excel_analysis/extract.zig` — Zig ZIP entry extractor (built as `extract`)
-- `/tmp/excel_analysis/test_opc.c` — C tester for our OPC encoder
-- `/tmp/excel_analysis/libd_compress.c` — libdeflate raw-DEFLATE compressor for comparison
-- `/tmp/dfp_debug/our_encode.c` + binary — generic fingerprint encoder caller
-- `/tmp/dfp_debug/gen_zlib_target.c` + binary — real zlib output generator
-
-Real-zlib L1 default on sheet2_orig.bin gives 53413B — proves our L1 is
-byte-correct after the MAX_DIST fix. So whatever Excel does, it's NOT
-standard zlib L1.
+The old `/tmp/excel_analysis/*` fixtures from a prior session are not present
+in this shell session. Current recreated CPI fixtures live under
+`/tmp/dfp_excel_probe/`, and the broader workbook probe directory is
+`/tmp/dfp_xlsx_probe_dir/`.
 
 ## New evidence from current Codex session (2026-05-25)
 
@@ -113,7 +111,10 @@ zlib encoder paths:
   streams. This fixes a real bug exposed by memLevel=7: a token chunk can start
   with a match whose distance points into a previous block, so a block cannot
   always reconstruct its raw bytes from its local token slice alone.
-- Full suite is now 102/102 green.
+- Token-only multi-block helpers now reconstruct the full raw stream once and
+  delegate into raw-slice-aware per-chunk emission. A regression test covers a
+  chunk beginning with a match whose distance reaches into the previous chunk.
+- Full suite is now 105/105 green.
 
 The original `/tmp/excel_analysis` fixtures were not present, so a similar
 local workbook was probed:
@@ -209,10 +210,18 @@ Implemented first response:
   `AppVersion`.
 - `zip_corpus_probe --verbose` now prints OOXML app metadata when
   `docProps/app.xml` is present.
+- `zip_corpus_probe --verbose` now prints compact block summaries on misses,
+  e.g. `blocks: dynamic:701 stored:0 stored:0 dynamic:8191 ...`.
 - Local probe examples:
   - CPI workbook: `Microsoft Excel`, `AppVersion=16.0300`
   - sample workbook: `Microsoft Excel`, `AppVersion=14.0300`
   - scorely template: `LibreOffice/6.1.0.3...`
+
+Current probe check:
+- `/tmp/dfp_xlsx_probe_dir --verbose` completes without crashing.
+- CPI workbook remains mostly missed: small entries hit fingerprint #28, while
+  large worksheet streams miss with memLevel=7-like block cadence and explicit
+  empty stored flush markers.
 
 ## Outstanding gaps to close
 
@@ -227,31 +236,19 @@ Implemented first response:
 ## Recent commit log (most recent first)
 
 ```
-qnqwxlrm encoder: Microsoft OOXML / Office OPC fingerprint #28
-trpzxvns tools: probe — skip AppleDouble sidecars; probe-install build step
-mtvylxmw tools+docs: probe Downloads corpus + record findings
-unkpllko encoder: multi-block default L1-L9 + Z_FIXED + Z_FILTERED
-vlyzuutl tools: zip-corpus-probe — real-world raw-DEFLATE probe
-owsvqpwz tests: @cImport(zlib.h) fidelity harness
-nurwurmz encoder: module split — bitstream, huffman, match, blocks
-qyooowtp encoder: multi-block HUFFMAN_ONLY + RLE — 100% corpus hit rate
-lzqqvsoz encoder: TOO_FAR rule — reject length-3 matches with distance > 4096
-xwsqsnwo encoder: Z_FILTERED strategy fingerprints #22-#27 + hit-rate >= 70%
-qqlpykzq encoder: Z_RLE strategy fingerprint #21
-nmzxlxpw encoder: Z_FIXED strategy fingerprints + L2/L3 max_lazy_match fix
-trwwzoxk encoder: L1 dispatcher fix — switch to 3-way dynamic-over-tokens
+mrzxkyku tools: report OOXML producer metadata
+uwysrsmz encoder: add zlib memLevel 7 fast profiles
+mnvnmutw tools: add deflate block inspector probe
+zoplssqr inspect: decode dynamic deflate block ranges
+vxmkryvy inspect: decode fixed deflate block ranges
+xkztuvlm inspect: report stored deflate block ranges
+zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 ```
 
 ## How to resume after a rollback
 
 1. Read this file (`SESSION_RESUME.md`) first.
-2. `git status` (or `jj status`) — uncommitted MAX_DIST fix should be in
-   `src/match.zig`. If not, re-apply per "What we just landed" above.
-3. Run `./test` — should be 96/96 green.
-4. Verify the MAX_DIST fix landed:
-   ```
-   /tmp/dfp_debug/our_encode /tmp/dfp_debug/infozip_enc.bin out.bin 3
-   /tmp/dfp_debug/gen_zlib_target /tmp/dfp_debug/infozip_enc.bin zlib.bin 1 default
-   cmp out.bin zlib.bin && echo "MAX_DIST fix is live"
-   ```
-5. Continue with the sheet2/Excel mystery per "Specific next experiment".
+2. `jj status` — current uncommitted work, if any, should be limited to the
+   active probe/fix being worked.
+3. Run `./test` — should be 105/105 green.
+4. Continue with the sheet2/Excel mystery per "Specific next experiment".
