@@ -3,6 +3,7 @@ ver=1.2
 depth=3
 
 annotate=[
+	LEARNINGS.md = Session learnings and environment/build observations worth preserving.
 	README.md = Public overview: current status, blar/difz role, build commands, CLI surface.
 	SESSION_RESUME.md = Live handoff for MAX_DIST fix and active Excel sheet2 large-entry investigation.
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
