@@ -14,20 +14,20 @@ reproduce the exact bytes.
 
 Active reverse-engineering / implementation project.
 
-- 31 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
+- 32 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
   fixed / filtered strategies, collapsed zlib HUFFMAN_ONLY and RLE fingerprints,
   zlib L1 explicit `SYNC_FLUSH` + empty finish handling, and zlib L6
-  memLevel 6/7/9 pending-buffer variants observed in ZIP-family streams.
-- `./test` currently passes 145 tests: Zig unit tests, CLI integration tests,
+  memLevel 6/7/9 pending-buffer variants plus Info-ZIP-style 4096-symbol
+  profitability flushes observed in ZIP-family streams.
+- `./test` currently passes 152 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
 - Real-world ZIP-family probing is underway. Current checkpoint hit rates are
   recorded in [SESSION_RESUME.md](SESSION_RESUME.md).
 - The first 200 mixed local ZIP-family DEFLATE streams currently reproduce at
-  97.0% exact coverage after adding the zlib L6 memLevel=9 profile; the
-  remaining misses cluster in Apple/iOS app payloads with 4096-token block
-  cadence and need a separate encoder-family investigation.
+  100.0% exact coverage after adding zlib L6 memLevel=9 and generic
+  Info-ZIP-style 4096-symbol profitability flush profiles.
 - Active research target: large ZIP-family XML streams with non-default flush
   topology. The core now models these as abstract `DeflateReproductionConfig`
   values with per-offset `FlushEvent` counts derived from the target stream,

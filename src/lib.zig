@@ -179,6 +179,7 @@ pub const FINGERPRINTS = [_]Fingerprint{
     .{ .id = 29, .description = "zlib level=6 DEFAULT_STRATEGY memLevel=9 (32767-symbol pending buffer)", .encode = encoder.encodeZlibLevel6Mem9 },
     .{ .id = 30, .description = "zlib level=6 DEFAULT_STRATEGY memLevel=7 (8191-symbol pending buffer)", .encode = encoder.encodeZlibLevel6Mem7 },
     .{ .id = 31, .description = "zlib level=6 DEFAULT_STRATEGY memLevel=6 (4095-symbol pending buffer)", .encode = encoder.encodeZlibLevel6Mem6 },
+    .{ .id = 32, .description = "zlib-compatible level=6 DEFAULT_STRATEGY with 4096-symbol early block flushes", .encode = encoder.encodeZlibLevel6Chunk4096 },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.

@@ -69,7 +69,7 @@
         devShells.default = pkgs.mkShell {
           # zlib is test-time only (oracle for byte-exact comparison against
           # real zlib output); never a runtime dep of the library or CLI.
-          packages = [ zigPkg pkgs.hyperfine pkgs.zlib ];
+          packages = [ zigPkg pkgs.hyperfine pkgs.zlib pkgs.zip ];
         };
       });
 }

@@ -747,6 +747,88 @@ pub fn encodeZlibLevel6Mem6(allocator: std.mem.Allocator, raw: []const u8) ![]u8
     return encodeZlibSlowMemLevel(allocator, raw, LZ77_LEVEL_6, 6);
 }
 
+const INFOZIP_NORMAL_CHUNK_SYMBOLS: usize = 32767;
+const INFOZIP_PROFIT_CHECKPOINT_SYMBOLS: usize = 4096;
+
+fn infoZipDistanceCostBits(token: Token) u64 {
+    return switch (token) {
+        .literal => 0,
+        .match => |m| blk: {
+            const dc = distanceCode(m.distance);
+            break :blk 5 + @as(u64, dc.extra_bits);
+        },
+    };
+}
+
+fn infoZipShouldEarlyFlush(symbols: usize, matches: usize, distance_cost_bits: u64, raw_len: usize) bool {
+    if ((symbols & (INFOZIP_PROFIT_CHECKPOINT_SYMBOLS - 1)) != 0) return false;
+    const out_len = ((@as(u64, symbols) * 8) + distance_cost_bits) >> 3;
+    return matches < symbols / 2 and out_len < raw_len / 2;
+}
+
+fn encodeInfoZipProfitChunked(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    tokens: []const Token,
+) ![]u8 {
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    if (tokens.len == 0) {
+        try emitFixedHuffmanFromTokensBlock(&bw, tokens, 1);
+        return bw.toOwnedSlice();
+    }
+
+    var start_i: usize = 0;
+    var start_raw: usize = 0;
+    var i: usize = 0;
+    var raw_pos: usize = 0;
+    var symbols: usize = 0;
+    var matches: usize = 0;
+    var distance_cost_bits: u64 = 0;
+
+    while (i < tokens.len) {
+        const token = tokens[i];
+        raw_pos += tokenRawLen(token);
+        symbols += 1;
+        switch (token) {
+            .literal => {},
+            .match => {
+                matches += 1;
+                distance_cost_bits += infoZipDistanceCostBits(token);
+            },
+        }
+        i += 1;
+
+        const raw_len = raw_pos - start_raw;
+        const buffer_full = symbols == INFOZIP_NORMAL_CHUNK_SYMBOLS;
+        const profitable = infoZipShouldEarlyFlush(symbols, matches, distance_cost_bits, raw_len);
+        if (!buffer_full and !profitable) continue;
+
+        const is_last: u1 = if (i == tokens.len) 1 else 0;
+        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[start_i..i], raw[start_raw..raw_pos], is_last);
+        start_i = i;
+        start_raw = raw_pos;
+        symbols = 0;
+        matches = 0;
+        distance_cost_bits = 0;
+    }
+
+    if (start_i < tokens.len) {
+        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[start_i..], raw[start_raw..], 1);
+    }
+    std.debug.assert(raw_pos == raw.len);
+    return bw.toOwnedSlice();
+}
+
+/// zlib-compatible level=6 lazy LZ77 with Info-ZIP-style block flushing:
+/// test profitability every 4096 symbols, otherwise flush at 32767 symbols.
+pub fn encodeZlibLevel6Chunk4096(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const tokens = try lz77TokenizeSlow(allocator, raw, LZ77_LEVEL_6);
+    defer allocator.free(tokens);
+    return encodeInfoZipProfitChunked(allocator, raw, tokens);
+}
+
 /// zlib level=6 with memLevel=9: same lazy LZ77 parameters as normal L6, but
 /// with a 32767-symbol pending buffer and the observed 15-bit hash cap.
 pub fn encodeZlibLevel6Mem9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {

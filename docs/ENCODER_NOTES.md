@@ -42,6 +42,31 @@ the first 200 local ZIP-family streams from 47.5% exact coverage to 97.0%;
 #29 covered 131/200 streams. memLevel=6 (#31) and memLevel=7 (#30) are
 registered from oracle evidence, but did not improve that first-200 slice.
 
+### zlib-compatible L6 — Info-ZIP-style profitability flushes
+**Date:** 2026-05-25
+**Probe:** `tests/integration/infozip_roundtrip.sh`; private ZIP-family probe
+**Reference version:** Info-ZIP `zip -6` from Nix and Apple `/usr/bin/zip`
+
+Some ZIP-family streams use ordinary zlib-compatible L6 tokenization but do
+not simply flush at the normal pending-buffer limit. They test block
+profitability every 4096 symbols, and flush early only when the block appears
+profitable; otherwise they continue to the normal 32767-symbol limit and may
+fall back to STORED blocks.
+
+The implemented abstract rule for fingerprint #32 is:
+
+- tokenize with the existing L6 lazy LZ77 path;
+- after every 4096 symbols, estimate profitability using Info-ZIP's distance
+  cost upper bound (`symbols * 8 + distance_freq * (5 + extra_bits)`);
+- flush early when matches are less than half of symbols and estimated output
+  is less than half of raw bytes for the current block;
+- otherwise flush at 32767 symbols.
+
+This reproduces both all-profitable 4096-block streams and mixed
+`dynamic:4096` followed by `dynamic:32767` or STORED fallback shapes. Private
+first-200 mixed ZIP-family coverage moved from 97.0% to 100.0%; #32 covered
+the remaining 6 streams.
+
 ### zlib — HUFFMAN_ONLY (all levels 1..9)
 **Date:** 2026-05-21
 **Probe:** `bench/probes/zlib_huffman_only.c`
