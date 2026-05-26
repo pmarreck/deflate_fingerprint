@@ -73,7 +73,9 @@
 - [ ] Keep near-matches as corpus evidence for future work; do not rely on difz as a substitute for pursuing a real fingerprint unless the stream is genuinely outside the supported model
 - [ ] Define the event-level correction stream format: residuals over parsed DEFLATE decisions (LZ77 literals/matches, match-candidate hops, block splits, block types, Huffman tree choices, flush/finish markers), explicitly avoiding raw packed-byte diffs as the primary residual layer
 - [ ] Add per-stream storage economics scoring: compare `strong_compress(raw) + fingerprint/config + correction` against storing the original DEFLATE blob, and record the decision in corpus probe reports
-- [ ] Study precomp/preflate/preflate-rs/grittibanzli/reflate behavior and document which correction-stream ideas are compatible with this project's RFC 1951-only core and C FFI
+- [x] Study precomp/preflate/preflate-rs/grittibanzli/reflate behavior and document which correction-stream ideas are compatible with this project's RFC 1951-only core and C FFI; see `docs/PRIOR_ART.md` (2026-05-26 EDT)
+- [ ] Define a DFP surrogate container schema, preferably BLIP/BLAR-shaped: raw bytes, reproduction config, optional event correction, optional stored-original fallback, mode, sizes, and hashes
+- [ ] Add `pack(deflate) -> dfp-container` and `unpack(dfp-container) -> deflate` tests for exact-config streams, stored-original fallback, and later event-corrected streams
 
 ## v0.2 — libdeflate + 7-Zip
 

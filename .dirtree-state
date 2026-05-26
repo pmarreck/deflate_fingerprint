@@ -12,6 +12,7 @@ annotate=[
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
 	docs/DEFLATE_DIALS.md = Catalog of DEFLATE dials that create valid but byte-distinct streams.
 	docs/ENCODER_NOTES.md = Append-only empirical findings by encoder/probe; confirmed behavior lives here.
+	docs/PRIOR_ART.md = Prior-art notes: precomp/preflate/preflate-rs/grittibanzli/reflate lessons, licenses, and difz bit-mode role.
 	docs/V0.1_STATUS.md = Older v0.1 checkpoint; may lag current registry/test counts, consult README and SESSION_RESUME for latest.
 	include/deflate_fingerprint.h = Public C FFI header including identify, registry encode, and explicit FlushEvent config encode.
 	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.

@@ -165,6 +165,9 @@ The scripts avoid host macOS / Zig libSystem stub mismatches documented in
 - [GOALS.md](GOALS.md) - mission, scope, success criteria, audiences
 - [DESIGN.md](DESIGN.md) - architectural intent, algorithm, module breakdown
 - [PLAN.md](PLAN.md) - phased roadmap and current work items
+- [docs/PRIOR_ART.md](docs/PRIOR_ART.md) - prior-art notes for
+  precomp/preflate/preflate-rs/grittibanzli/reflate and how their ideas map to
+  this project
 - [docs/ENCODER_NOTES.md](docs/ENCODER_NOTES.md) - empirical encoder findings
 - [docs/DEFLATE_DIALS.md](docs/DEFLATE_DIALS.md) - enumerated DEFLATE choices
 - [docs/V0.1_STATUS.md](docs/V0.1_STATUS.md) - current v0.1 implementation status
