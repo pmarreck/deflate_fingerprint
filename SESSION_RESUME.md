@@ -349,9 +349,11 @@ Current probe check:
   work, so the ZIP-family gain did not regress worksheet configured matching.
 - The remaining first-200 mixed misses come from an iOS app payload cluster:
   block shapes include `dynamic:4096`, `dynamic:4096 dynamic:32767...`, and
-  dynamic-then-stored fallbacks. A Ruby zlib 1.2.12 sweep did not match the
-  sampled CodeResources miss, so treat this as likely Apple/older-toolchain
-  encoder-family work rather than another simple zlib L6 memLevel registry add.
+  dynamic-then-stored fallbacks. A Ruby zlib 1.2.12 sweep, C zlib oracle sweep
+  over levels 0..9 / memLevels 1..9 / strategies default-filtered-huffman-rle-
+  fixed, and Apple `compression_tool -a zlib` did not match the sampled
+  CodeResources miss, so treat this as likely Apple/older-toolchain
+  encoder-family work rather than another simple zlib registry add.
 - ZIP-family extension discovery now includes `.war`, `.ear`, `.whl`, `.xpi`,
   `.crx`, `.vsix`, `.ods`, `.odp`, and `.cbz`. Sampled XPI coverage is 78.6%;
   ODS/ODP are 100%; sampled CBZ JPEG entries are 0% but are byte-exactly

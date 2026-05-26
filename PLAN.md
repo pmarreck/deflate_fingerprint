@@ -126,7 +126,7 @@
   segmented `chain=16 nice=48 insert=4`, memLevel=7, plus additional sync
   flushes at 1024-row boundaries (`row1024` cluster) (2026-05-25 11:20 EDT)
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
-- [ ] Apple/iOS app payload DEFLATE cluster: remaining first-200 mixed misses show `dynamic:4096` and dynamic-then-stored fallbacks; Ruby zlib 1.2.12 level/mem/strategy sweep did not match sampled CodeResources, so investigate Apple/CoreFoundation or older bundled encoder behavior.
+- [ ] Apple/iOS app payload DEFLATE cluster: remaining first-200 mixed misses show `dynamic:4096` and dynamic-then-stored fallbacks; Ruby zlib 1.2.12, C zlib oracle level/mem/strategy sweep, and Apple `compression_tool -a zlib` did not match sampled CodeResources, so investigate Apple/CoreFoundation or older bundled encoder behavior.
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
