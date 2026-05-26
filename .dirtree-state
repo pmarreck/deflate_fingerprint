@@ -24,9 +24,13 @@ annotate=[
 	src/lib.zig = Public API/FFI and fingerprint registry; IDs 29-32 cover zlib L6 memLevel variants and Info-ZIP-style profitability flushes.
 	src/match.zig = LZ77 tokenizers and zlib-style params; memLevel adjustment caps hash_bits at 15 while pending buffer size varies separately.
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
+	src/png.zig = PNG IDAT parser: concatenates chunks, validates zlib header, exposes raw RFC1951 body and wrapper metadata.
 	tests/integration/fixtures/extract_zip_deflate.c = Tiny ZIP32 test helper that extracts the first method=8 raw DEFLATE payload from generator-oracle ZIP archives.
+	tests/integration/fixtures/gen_png_idat.c = Fixture generator: emits tiny PNG-like file with deterministic zlib-wrapped IDAT stream.
 	tests/integration/infozip_roundtrip.sh = Integration test: generates Info-ZIP zip -6 fixtures and asserts raw method=8 streams identify as fingerprint #32.
+	tests/integration/png_probe.sh = Integration test: generated PNG-like fixture exercises png-corpus-probe against IDAT zlib data.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
 	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE hypotheses, sweeps fast params, reports token divergence, and tests row-chunk flush topology.
+	tools/png_corpus_probe.zig = PNG corpus probe: extracts IDAT raw DEFLATE, inflates PNG-filtered bytes, and runs fingerprint/config identification.
 	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, miss block shapes, and optional Excel worksheet cluster coverage.
 ]

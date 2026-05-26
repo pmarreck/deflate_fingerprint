@@ -369,6 +369,16 @@ Current probe check:
   ODS/ODP are 100%; sampled CBZ JPEG entries are 0% but are byte-exactly
   reproduced by `/usr/bin/zip -6`, making Info-ZIP/Apple ZIP a high-value next
   oracle.
+- First PNG IDAT adapter/probe is implemented:
+  - `src/png.zig` parses PNG chunks, concatenates IDAT data, validates the
+    RFC1950 zlib header, exposes raw RFC1951 body bytes, preserves CMF/FLG,
+    Adler32, and IDAT chunk sizes.
+  - `tools/png_corpus_probe.zig` walks `.png` files, inflates IDAT zlib data to
+    PNG-filtered bytes, and runs registry/config identification against the raw
+    DEFLATE body.
+  - `tests/integration/png_probe.sh` generates a deterministic public PNG-like
+    fixture and verifies the probe identifies its zlib stream. Full suite:
+    161/161 green.
 
 ## Recent commit log (most recent first)
 
@@ -387,6 +397,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 152/152 green.
+3. Run `./test` — should be 161/161 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

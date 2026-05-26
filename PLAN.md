@@ -53,7 +53,8 @@
 - [ ] Corpus harvest: collect 1000+ real-world `.docx` / `.xlsx` / `.pptx` / `.pages` / `.numbers` / `.key` / `.epub` / `.pdf` / `.png` / `.zip` / `.jar` / `.war` / `.ear` / `.apk` / `.ipa` / `.whl` / `.xpi` / `.crx` / `.vsix` / `.odt` / `.ods` / `.odp` / `.cbz` / `.gz` files from public sources; verify ≥70% hit rate
 - [ ] Expand `zip-corpus-probe` extension/classification coverage for the full ZIP-container family: JAR/WAR/EAR, APK, IPA, Python wheels, browser extensions, VSIX, OpenDocument, EPUB, CBZ, OOXML, and plain ZIP
 - [ ] Add development-only generator oracles via `flake.nix` as needed for libdeflate, 7-Zip, miniz, Go flate, .NET DeflateStream, Java `java.util.zip`, Apple/CoreFoundation, and zlib version drift probes
-- [ ] Add PNG IDAT probe: extract concatenated IDAT DEFLATE stream(s), validate DEFLATE reproduction, and record PNG filter/chunk metadata needed by upstream whole-file round-trip tests
+- [x] Add first PNG IDAT probe: extract concatenated IDAT zlib stream, strip to raw RFC 1951 body, inflate to PNG-filtered bytes, run registry/config identification, and cover with generated PNG integration fixture (2026-05-26 EDT)
+- [ ] Extend PNG IDAT metadata capture: parse IHDR enough to expose row filter-byte offsets/counts, optionally validate chunk CRCs, and report IDAT chunk-size topology for upstream whole-file restoration tests
 - [ ] Add PDF FlateDecode probe: walk PDF object streams/streams with `/FlateDecode`, extract raw DEFLATE payloads, and preserve object-level metadata for byte-exact integration tests
 - [ ] Add iWork probe: inspect `.pages` / `.numbers` / `.key` package structure and extract embedded DEFLATE streams for the same fingerprint/config path
 - [ ] Garnix CI green on `packages.default` + `checks.test`

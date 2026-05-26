@@ -82,6 +82,27 @@ pub fn build(b: *std.Build) void {
     const probe_install = b.addInstallArtifact(probe, .{});
     b.step("probe-install", "Install zip-corpus-probe to zig-out/bin").dependOn(&probe_install.step);
 
+    // ─── PNG IDAT corpus probe (tools/png_corpus_probe.zig) ──────────────
+    // Extracts PNG IDAT's zlib-wrapped DEFLATE body, inflates to PNG-filtered
+    // bytes, and runs the raw RFC1951 identifier.
+    const png_probe_mod = b.createModule(.{
+        .root_source_file = b.path("tools/png_corpus_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    png_probe_mod.addImport("deflate_fingerprint", core_mod);
+    png_probe_mod.linkSystemLibrary("z", .{});
+    const png_probe = b.addExecutable(.{
+        .name = "png-corpus-probe",
+        .root_module = png_probe_mod,
+    });
+    const png_probe_run = b.addRunArtifact(png_probe);
+    if (b.args) |args| png_probe_run.addArgs(args);
+    b.step("png-probe", "Run the PNG IDAT corpus probe (dev shell only)").dependOn(&png_probe_run.step);
+    const png_probe_install = b.addInstallArtifact(png_probe, .{});
+    b.step("png-probe-install", "Install png-corpus-probe to zig-out/bin").dependOn(&png_probe_install.step);
+
     // ─── Raw DEFLATE block inspector (tools/deflate_block_inspect.zig) ────
     // Dev helper for reverse-engineering block-boundary heuristics.
     const block_inspect_mod = b.createModule(.{
