@@ -31,6 +31,10 @@ extern "C" {
 #define DFP_TOKENIZATION_PREFIX_HISTORY  1
 
 #define DFP_FINISH_EMPTY_FIXED_BLOCK     0
+#define DFP_FINISH_LAST_DATA_BLOCK       1
+
+#define DFP_PARSE_FAST                   0
+#define DFP_PARSE_SLOW                   1
 
 /* ── Identification result ────────────────────────────────────────────── */
 
@@ -60,12 +64,17 @@ typedef struct {
     size_t   final_flush_empty_fixed_blocks_before;
     uint8_t  tokenization_mode;  /* DFP_TOKENIZATION_* */
     uint8_t  finish_mode;        /* DFP_FINISH_*       */
+    uint8_t  parse_mode;         /* DFP_PARSE_*        */
     uint8_t  filtered;           /* 0=false, nonzero=true */
-    uint8_t  _pad[7];            /* reserved; set to 0 */
+    uint8_t  _pad[6];            /* reserved; set to 0 */
     size_t   window_size;
     const dfp_flush_event_t *sync_flushes;
     size_t   sync_flushes_len;
     size_t   final_flush_empty_stored_blocks;
+    const size_t *block_token_counts;
+    size_t   block_token_counts_len;
+    const size_t *empty_fixed_after_block_counts;
+    size_t   empty_fixed_after_block_counts_len;
 } dfp_deflate_config_t;
 
 /* ── Public API ───────────────────────────────────────────────────────── */

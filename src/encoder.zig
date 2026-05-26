@@ -81,7 +81,13 @@ pub const TokenizationMode = enum {
     prefix_history,
 };
 
+pub const LZ77ParseMode = enum {
+    fast,
+    slow,
+};
+
 pub const FinishMode = enum {
+    last_data_block,
     empty_fixed_block,
 };
 
@@ -94,7 +100,10 @@ pub const FlushEvent = extern struct {
 pub const DeflateReproductionConfig = struct {
     params: LZ77Params,
     mem_level: u4 = 8,
+    parse_mode: LZ77ParseMode = .fast,
     sync_flushes: []const FlushEvent = &.{},
+    block_token_counts: []const usize = &.{},
+    empty_fixed_after_block_counts: []const usize = &.{},
     final_flush_empty_fixed_blocks_before: usize = 0,
     final_flush_empty_stored_blocks: usize = 0,
     /// Currently supported stream terminator: an empty BFINAL=1 fixed-Huffman
@@ -1249,9 +1258,13 @@ fn emitChunkedTokenBlocks(
     allocator: std.mem.Allocator,
     raw: []const u8,
     params: LZ77Params,
+    parse_mode: LZ77ParseMode,
     chunk_symbols: usize,
 ) !void {
-    const tokens = try lz77Tokenize(allocator, raw, params);
+    const tokens = switch (parse_mode) {
+        .fast => try lz77Tokenize(allocator, raw, params),
+        .slow => try lz77TokenizeSlow(allocator, raw, params),
+    };
     defer allocator.free(tokens);
 
     var i: usize = 0;
@@ -1283,9 +1296,13 @@ fn emitChunkedTokenBlocksFromPrefix(
     segment_start: usize,
     segment_end: usize,
     params: LZ77Params,
+    parse_mode: LZ77ParseMode,
     chunk_symbols: usize,
 ) !void {
-    const tokens = try lz77Tokenize(allocator, raw[0..segment_end], params);
+    const tokens = switch (parse_mode) {
+        .fast => try lz77Tokenize(allocator, raw[0..segment_end], params),
+        .slow => try lz77TokenizeSlow(allocator, raw[0..segment_end], params),
+    };
     defer allocator.free(tokens);
 
     var i = tokenIndexAtRawOffset(tokens, segment_start) orelse return error.FlushBoundaryInsideToken;
@@ -1306,6 +1323,7 @@ fn encodeSegmentedConfiguredDeflate(
     raw: []const u8,
     params: LZ77Params,
     mem_level: u4,
+    parse_mode: LZ77ParseMode,
     flushes: []const FlushEvent,
     final_flush_fixed_before_count: usize,
     final_flush_count: usize,
@@ -1319,12 +1337,12 @@ fn encodeSegmentedConfiguredDeflate(
     for (flushes) |flush| {
         const flush_offset = flush.raw_offset;
         if (flush_offset < segment_start or flush_offset > raw.len) continue;
-        try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, chunk_symbols);
+        try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, parse_mode, chunk_symbols);
         try writeFlushEvent(&bw, flush);
         segment_start = flush_offset;
     }
 
-    try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..], adjusted, chunk_symbols);
+    try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..], adjusted, parse_mode, chunk_symbols);
     try writeEmptyFixedBlocks(&bw, final_flush_fixed_before_count);
     try writeEmptyStoredBlocks(&bw, final_flush_count);
     try emitFixedHuffmanFromTokensBlock(&bw, &.{}, 1);
@@ -1337,6 +1355,7 @@ fn encodePrefixHistoryConfiguredDeflate(
     raw: []const u8,
     params: LZ77Params,
     mem_level: u4,
+    parse_mode: LZ77ParseMode,
     flushes: []const FlushEvent,
     final_flush_fixed_before_count: usize,
     final_flush_count: usize,
@@ -1350,22 +1369,75 @@ fn encodePrefixHistoryConfiguredDeflate(
     for (flushes) |flush| {
         const flush_offset = flush.raw_offset;
         if (flush_offset < segment_start or flush_offset > raw.len) continue;
-        emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, flush_offset, adjusted, chunk_symbols) catch |err| switch (err) {
-            error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, chunk_symbols),
+        emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, flush_offset, adjusted, parse_mode, chunk_symbols) catch |err| switch (err) {
+            error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..flush_offset], adjusted, parse_mode, chunk_symbols),
             else => |e| return e,
         };
         try writeFlushEvent(&bw, flush);
         segment_start = flush_offset;
     }
 
-    emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, raw.len, adjusted, chunk_symbols) catch |err| switch (err) {
-        error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..], adjusted, chunk_symbols),
+    emitChunkedTokenBlocksFromPrefix(&bw, allocator, raw, segment_start, raw.len, adjusted, parse_mode, chunk_symbols) catch |err| switch (err) {
+        error.FlushBoundaryInsideToken => try emitChunkedTokenBlocks(&bw, allocator, raw[segment_start..], adjusted, parse_mode, chunk_symbols),
         else => |e| return e,
     };
     try writeEmptyFixedBlocks(&bw, final_flush_fixed_before_count);
     try writeEmptyStoredBlocks(&bw, final_flush_count);
     try emitFixedHuffmanFromTokensBlock(&bw, &.{}, 1);
 
+    return bw.toOwnedSlice();
+}
+
+/// Emit a DEFLATE stream using explicit per-block token counts. This models
+/// target-derived block-boundary plans, such as fixed 4096-symbol split points,
+/// without tying the core encoder to any container or producer name.
+fn encodeExplicitBlockPlanDeflate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+    parse_mode: LZ77ParseMode,
+    block_token_counts: []const usize,
+    empty_fixed_after_block_counts: []const usize,
+) ![]u8 {
+    if (empty_fixed_after_block_counts.len != 0 and empty_fixed_after_block_counts.len != block_token_counts.len) {
+        return error.InvalidBlockPlan;
+    }
+
+    const adjusted = withMemLevel(params, mem_level);
+    const tokens = switch (parse_mode) {
+        .fast => try lz77Tokenize(allocator, raw, adjusted),
+        .slow => try lz77TokenizeSlow(allocator, raw, adjusted),
+    };
+    defer allocator.free(tokens);
+
+    var total_planned: usize = 0;
+    for (block_token_counts) |count| {
+        if (count == 0) return error.InvalidBlockPlan;
+        total_planned += count;
+    }
+    if (total_planned != tokens.len) return error.InvalidBlockPlan;
+
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    var token_start: usize = 0;
+    var raw_start: usize = 0;
+    for (block_token_counts, 0..) |count, block_i| {
+        const empty_fixed_after = if (empty_fixed_after_block_counts.len == 0) 0 else empty_fixed_after_block_counts[block_i];
+        if (block_i + 1 == block_token_counts.len and empty_fixed_after != 0) return error.InvalidBlockPlan;
+
+        const token_end = token_start + count;
+        const raw_end = raw_start + tokenStreamRawLen(tokens[token_start..token_end]);
+        const bfinal: u1 = if (block_i + 1 == block_token_counts.len and empty_fixed_after == 0) 1 else 0;
+        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[token_start..token_end], raw[raw_start..raw_end], bfinal);
+        try writeEmptyFixedBlocks(&bw, empty_fixed_after);
+        token_start = token_end;
+        raw_start = raw_end;
+    }
+
+    std.debug.assert(token_start == tokens.len);
+    std.debug.assert(raw_start == raw.len);
     return bw.toOwnedSlice();
 }
 
@@ -1377,6 +1449,21 @@ pub fn encodeConfiguredDeflate(
     config: DeflateReproductionConfig,
 ) ![]u8 {
     switch (config.finish_mode) {
+        .last_data_block => {
+            if (config.sync_flushes.len != 0) return error.InvalidConfig;
+            if (config.final_flush_empty_fixed_blocks_before != 0) return error.InvalidConfig;
+            if (config.final_flush_empty_stored_blocks != 0) return error.InvalidConfig;
+            if (config.block_token_counts.len == 0) return error.InvalidConfig;
+            return encodeExplicitBlockPlanDeflate(
+                allocator,
+                raw,
+                config.params,
+                config.mem_level,
+                config.parse_mode,
+                config.block_token_counts,
+                config.empty_fixed_after_block_counts,
+            );
+        },
         .empty_fixed_block => {},
     }
 
@@ -1386,6 +1473,7 @@ pub fn encodeConfiguredDeflate(
             raw,
             config.params,
             config.mem_level,
+            config.parse_mode,
             config.sync_flushes,
             config.final_flush_empty_fixed_blocks_before,
             config.final_flush_empty_stored_blocks,
@@ -1395,6 +1483,7 @@ pub fn encodeConfiguredDeflate(
             raw,
             config.params,
             config.mem_level,
+            config.parse_mode,
             config.sync_flushes,
             config.final_flush_empty_fixed_blocks_before,
             config.final_flush_empty_stored_blocks,
@@ -1433,6 +1522,53 @@ test "encodeConfiguredDeflate emits configured raw-offset sync flush markers" {
 
     try testing.expectEqual(@as(usize, 2), configured_flushes);
     try testing.expectEqual(@as(usize, 1), final_flushes);
+}
+
+test "encodeConfiguredDeflate honors explicit block token counts with final data block" {
+    const raw = "ABCABCABCABC";
+    const block_token_counts = [_]usize{ 3, 2 };
+
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .block_token_counts = &block_token_counts,
+        .finish_mode = .last_data_block,
+    });
+    defer testing.allocator.free(got);
+
+    const inspected = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(inspected);
+
+    try testing.expectEqual(@as(usize, 2), inspected.len);
+    try testing.expectEqual(@as(usize, 3), inspected[0].token_count);
+    try testing.expectEqual(false, inspected[0].bfinal);
+    try testing.expectEqual(@as(usize, 2), inspected[1].token_count);
+    try testing.expectEqual(true, inspected[1].bfinal);
+}
+
+test "encodeConfiguredDeflate honors empty fixed markers between planned data blocks" {
+    const raw = "ABCABCABCABC";
+    const block_token_counts = [_]usize{ 3, 2 };
+    const empty_fixed_after = [_]usize{ 1, 0 };
+
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .block_token_counts = &block_token_counts,
+        .empty_fixed_after_block_counts = &empty_fixed_after,
+        .finish_mode = .last_data_block,
+    });
+    defer testing.allocator.free(got);
+
+    const inspected = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(inspected);
+
+    try testing.expectEqual(@as(usize, 3), inspected.len);
+    try testing.expectEqual(@as(usize, 3), inspected[0].token_count);
+    try testing.expectEqual(false, inspected[0].bfinal);
+    try testing.expectEqual(inspect.BlockType.fixed, inspected[1].block_type);
+    try testing.expectEqual(@as(usize, 0), inspected[1].token_count);
+    try testing.expectEqual(false, inspected[1].bfinal);
+    try testing.expectEqual(@as(usize, 2), inspected[2].token_count);
+    try testing.expectEqual(true, inspected[2].bfinal);
 }
 
 test "encodeConfiguredDeflate supports per-offset empty stored counts" {

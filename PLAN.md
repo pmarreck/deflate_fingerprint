@@ -55,6 +55,7 @@
 - [ ] Add development-only generator oracles via `flake.nix` as needed for libdeflate, 7-Zip, miniz, Go flate, .NET DeflateStream, Java `java.util.zip`, Apple/CoreFoundation, and zlib version drift probes
 - [x] Add first PNG IDAT probe: extract concatenated IDAT zlib stream, strip to raw RFC 1951 body, inflate to PNG-filtered bytes, run registry/config identification, and cover with generated PNG integration fixture (2026-05-26 EDT)
 - [x] Add sanitized PNG miss-feature aggregation for private corpus runs: classify missed IDAT streams by dynamic/fixed/stored block presence, 4096-token dynamic blocks, and empty marker blocks without reporting private filenames (2026-05-26 EDT)
+- [x] Add abstract target-derived block-token-count reproduction configs with explicit LZ77 parse mode and C FFI coverage; private sampled PNG exact coverage improved 76.0% -> 88.0% by closing the 4096-token dynamic cluster and one empty-fixed-finish cluster (2026-05-26 EDT)
 - [ ] Extend PNG IDAT metadata capture: parse IHDR enough to expose row filter-byte offsets/counts, optionally validate chunk CRCs, and report IDAT chunk-size topology for upstream whole-file restoration tests
 - [ ] Add PDF FlateDecode probe: walk PDF object streams/streams with `/FlateDecode`, extract raw DEFLATE payloads, and preserve object-level metadata for byte-exact integration tests
 - [ ] Add iWork probe: inspect `.pages` / `.numbers` / `.key` package structure and extract embedded DEFLATE streams for the same fingerprint/config path
@@ -140,7 +141,7 @@
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
-- [ ] PNG IDAT miss follow-up: investigate sampled miss clusters with dynamic blocks, 4096-token dynamic cadence, and empty fixed markers as abstract flush/block-boundary configurations rather than producer names.
+- [ ] PNG IDAT miss follow-up: investigate remaining sampled miss clusters as abstract configs: explicit block type selection for fixed/dynamic row-like block plans, plus the unresolved single dynamic small-window-looking stream.
 - [ ] PDF FlateDecode coverage: distinguish DEFLATE reproduction from PDF object/container reconstruction, but test both enough to support blar integration
 - [ ] macOS/iWork coverage: determine whether Pages/Numbers/Keynote use ZIP, protobuf/snappy-like package internals, Apple/CoreFoundation DEFLATE, zlib, or mixed encoders across versions
 - [ ] gzip header bytes as secondary attribution signal

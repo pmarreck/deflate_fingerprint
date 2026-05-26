@@ -379,12 +379,22 @@ Current probe check:
     so private corpus runs can be summarized without exposing filenames.
   - `tests/integration/png_probe.sh` generates a deterministic public PNG-like
     fixture and verifies the probe identifies its zlib stream. Full suite:
-    163/163 green.
+    170/170 green.
 - Private sampled PNG checkpoint (25 local/NAS samples, filenames intentionally
-  omitted): 19/25 exact (76.0%), with hits at fingerprints #3, #4, #24, #25,
-  and #27. All 6 misses inspected cleanly; all contain dynamic blocks, 2 contain
-  at least one 4096-token dynamic block, 4 contain fixed blocks, and 3 contain
-  empty fixed markers. No sampled miss used stored blocks.
+  omitted): improved from 19/25 exact (76.0%) to 22/25 exact (88.0%) after
+  adding generic target-derived block-token-count configs plus explicit LZ77
+  parse mode (`fast` vs `slow`). The three newly configured exact streams
+  include the 4096-token dynamic cadence cluster and one empty-fixed-finish
+  cluster.
+- Remaining sampled PNG misses: 3/25. All inspect cleanly and contain dynamic
+  blocks; none still has the 4096-token dynamic cadence. Two have row-like
+  data blocks separated by empty fixed markers, suggesting the next abstract
+  dial is explicit block type selection per planned block. The third is a
+  single dynamic block with a smaller zlib window-looking header, but the
+  current 16 KiB-window candidates did not reproduce it.
+- New generic config dials exposed in Zig and C FFI: `parse_mode`, explicit
+  `block_token_counts`, and `empty_fixed_after_block_counts`. Core still does
+  not name PNG, Excel, Office, or other producers.
 
 ## Recent commit log (most recent first)
 
@@ -403,6 +413,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 163/163 green.
+3. Run `./test` — should be 170/170 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.
