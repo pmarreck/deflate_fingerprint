@@ -341,9 +341,17 @@ Current probe check:
     hits, 3 misses, 99.0% exact coverage.
   - 3 EPUBs: 160 DEFLATE streams, 159 registry hits, 1 miss, 99.4% exact
     coverage.
-- Mixed first-200 local ZIP-family run stayed at 47.5%, so the empty
-  fixed-before-stored dial appears to close an OOXML/worksheet-shaped gap, not
-  the broad non-OOXML ZIP-family gap.
+- Mixed first-200 local ZIP-family run is now 97.0% exact coverage:
+  194/200 identified, 6 missed. Fingerprint #29 (`zlib level=6
+  DEFAULT_STRATEGY memLevel=9`) covers 131 of the 200 streams and explains the
+  broad non-OOXML ZIP-family gap previously seen at 47.5%.
+- Private `.xlsx` aggregate remains 83.6% exact coverage after the memLevel
+  work, so the ZIP-family gain did not regress worksheet configured matching.
+- The remaining first-200 mixed misses come from an iOS app payload cluster:
+  block shapes include `dynamic:4096`, `dynamic:4096 dynamic:32767...`, and
+  dynamic-then-stored fallbacks. A Ruby zlib 1.2.12 sweep did not match the
+  sampled CodeResources miss, so treat this as likely Apple/older-toolchain
+  encoder-family work rather than another simple zlib L6 memLevel registry add.
 - ZIP-family extension discovery now includes `.war`, `.ear`, `.whl`, `.xpi`,
   `.crx`, `.vsix`, `.ods`, `.odp`, and `.cbz`. Sampled XPI coverage is 78.6%;
   ODS/ODP are 100%; sampled CBZ JPEG entries are 0% but are byte-exactly
@@ -367,6 +375,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 114/114 green.
+3. Run `./test` — should be 145/145 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

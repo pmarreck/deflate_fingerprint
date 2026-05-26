@@ -172,6 +172,13 @@ pub const FINGERPRINTS = [_]Fingerprint{
     // Z_FINISH block. Producer/application labels are corpus evidence; the
     // stable fingerprint describes only byte-reproduction behavior.
     .{ .id = 28, .description = "zlib level=1 DEFAULT_STRATEGY + SYNC_FLUSH + empty FINISH block", .encode = encoder.encodeZlibLevel1FlushFinish },
+
+    // ─── Larger zlib pending buffer / ZIP-tool default cluster ───────────
+    // Same level=6 lazy LZ77 behavior, but memLevel=9 doubles the pending
+    // symbol buffer to 32767 symbols. Core remains producer-agnostic.
+    .{ .id = 29, .description = "zlib level=6 DEFAULT_STRATEGY memLevel=9 (32767-symbol pending buffer)", .encode = encoder.encodeZlibLevel6Mem9 },
+    .{ .id = 30, .description = "zlib level=6 DEFAULT_STRATEGY memLevel=7 (8191-symbol pending buffer)", .encode = encoder.encodeZlibLevel6Mem7 },
+    .{ .id = 31, .description = "zlib level=6 DEFAULT_STRATEGY memLevel=6 (4095-symbol pending buffer)", .encode = encoder.encodeZlibLevel6Mem6 },
 };
 
 /// Identify which registered fingerprint reproduces `target` from `raw`.
@@ -615,6 +622,44 @@ test "fingerprintConfigured returns null for ordinary registered zlib stream" {
 
     const result = try fingerprintConfigured(std.testing.allocator, raw, target);
     try std.testing.expect(result == null);
+}
+
+test "identify recognizes zlib level=6 memLevel=9 streams" {
+    const raw = try std.testing.allocator.alloc(u8, 80_000);
+    defer std.testing.allocator.free(raw);
+    var x: u32 = 0x1234_5678;
+    for (raw) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+    const target = try fidelity.compressWithZlibMemLevel(std.testing.allocator, raw, 6, .default, 9);
+    defer std.testing.allocator.free(target);
+
+    const result = try identify(std.testing.allocator, raw, target);
+    try std.testing.expectEqual(@as(u16, 29), result.fingerprint_id);
+    try std.testing.expectEqual(Confidence.byte_exact, result.confidence);
+}
+
+test "identify recognizes zlib level=6 smaller memLevel streams" {
+    const raw = try std.testing.allocator.alloc(u8, 80_000);
+    defer std.testing.allocator.free(raw);
+    var x: u32 = 0x1234_5678;
+    for (raw) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+
+    const cases = [_]struct { mem_level: c_int, expected_id: u16 }{
+        .{ .mem_level = 7, .expected_id = 30 },
+        .{ .mem_level = 6, .expected_id = 31 },
+    };
+    for (cases) |case| {
+        const target = try fidelity.compressWithZlibMemLevel(std.testing.allocator, raw, 6, .default, case.mem_level);
+        defer std.testing.allocator.free(target);
+        const result = try identify(std.testing.allocator, raw, target);
+        try std.testing.expectEqual(case.expected_id, result.fingerprint_id);
+        try std.testing.expectEqual(Confidence.byte_exact, result.confidence);
+    }
 }
 
 test "identify: round-trip via Zig API matches the FFI path" {

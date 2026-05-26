@@ -23,6 +23,25 @@ Format per entry:
 
 ## zlib
 
+### zlib — level=6 DEFAULT_STRATEGY memLevel variants
+**Date:** 2026-05-25
+**Probe:** `src/encoder.zig` oracle tests using `fidelity.compressWithZlibMemLevel`; private ZIP-family probe
+**Reference version:** zlib runtime used by the Nix/dev-shell test target
+
+memLevel changes two byte-visible behaviors:
+
+- The pending symbol buffer changes the natural block cadence. Observed and
+  registered L6 variants now include memLevel=6, 7, 8 (default), and 9.
+- For memLevel=9, the byte-exact oracle match required a 32767-symbol pending
+  buffer but a hash regime capped at 15 bits (`hash_shift=5`), not a 16-bit
+  hash table. Using `hash_bits=16` missed high-entropy short matches and
+  diverged at the first stored-fallback block boundary.
+
+Private mixed ZIP-family signal: adding L6 memLevel=9 as fingerprint #29 moved
+the first 200 local ZIP-family streams from 47.5% exact coverage to 97.0%;
+#29 covered 131/200 streams. memLevel=6 (#31) and memLevel=7 (#30) are
+registered from oracle evidence, but did not improve that first-200 slice.
+
 ### zlib — HUFFMAN_ONLY (all levels 1..9)
 **Date:** 2026-05-21
 **Probe:** `bench/probes/zlib_huffman_only.c`

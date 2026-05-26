@@ -5,21 +5,22 @@ max_lines=80
 
 annotate=[
 	LEARNINGS.md = Session learnings and environment/build observations worth preserving.
+	PLAN.md = Running checklist of completed and open work; current gaps include Apple/iOS payload DEFLATE and broader PNG/PDF/iWork adapters.
 	README.md = Public overview: current status, blar/difz role, build commands, CLI surface.
-	SESSION_RESUME.md = Live handoff for abstract DEFLATE reproduction config work, memLevel=7 evidence, and current probe/fix status.
+	SESSION_RESUME.md = Live handoff: latest private-corpus signal, zlib L6 memLevel 6/7/9 fingerprints, and remaining Apple/iOS miss cluster.
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.
 	docs/DEFLATE_DIALS.md = Catalog of DEFLATE dials that create valid but byte-distinct streams.
 	docs/ENCODER_NOTES.md = Append-only empirical findings by encoder/probe; confirmed behavior lives here.
-	docs/V0.1_STATUS.md = Current v0.1 checkpoint: 28 fingerprints, 114 tests, observed flush schedules, config FFI, and 7/8 worksheet probe result.
+	docs/V0.1_STATUS.md = Older v0.1 checkpoint; may lag current registry/test counts, consult README and SESSION_RESUME for latest.
 	include/deflate_fingerprint.h = Public C FFI header including identify, registry encode, and explicit FlushEvent config encode.
 	src/bitstream.zig = LSB-first DEFLATE BitWriter and fixed-Huffman primitive emit helpers.
 	src/blocks.zig = DEFLATE block cost model, stored/fixed/dynamic emitters, raw-slice-aware multi-block dispatch helpers.
-	src/encoder.zig = Top-level fingerprint encoders plus generic DeflateReproductionConfig using per-offset FlushEvent schedules.
+	src/encoder.zig = Parameterized DEFLATE encoders; includes zlib L6 memLevel 6/7/9 variants and configured flush/final marker reproduction.
 	src/fidelity.zig = Test-only real-zlib oracle via @cImport(zlib.h) for byte-exact fidelity checks.
 	src/huffman.zig = zlib-compatible Huffman tree builder, canonical codes, and code-length RLE.
 	src/inspect.zig = Pure DEFLATE inspector: block ranges, observed flush schedules, and token traces for LZ77 divergence analysis.
-	src/lib.zig = Public Zig API, inline fingerprint registry, identify/encode dispatch, and C FFI exports including config encode.
-	src/match.zig = zlib-style LZ77 tokenizers, longestMatch, and zlib MAX_DIST behavior.
+	src/lib.zig = Public API/FFI and fingerprint registry; IDs 29-31 cover zlib L6 memLevel pending-buffer variants.
+	src/match.zig = LZ77 tokenizers and zlib-style params; memLevel adjustment caps hash_bits at 15 while pending buffer size varies separately.
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
 	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE hypotheses, sweeps fast params, reports token divergence, and tests row-chunk flush topology.

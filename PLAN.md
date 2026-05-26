@@ -42,6 +42,8 @@
 - [x] Add core `fingerprintConfigured` API for target-derived generic flush/finish configs and count configured exact hits separately in ZIP corpus probes; private sampled results: xlsx 79.5%, docx 100%, pptx 99.0%, epub 99.4% (2026-05-25 14:20 EDT)
 - [x] Add `zip-corpus-probe --max-streams` and `--progress` so mixed private corpora can be bounded and observable; first 200 mixed local DEFLATE streams: 47.5% exact, mostly zlib #4 hits with many non-OOXML misses (2026-05-25 14:35 EDT)
 - [x] Add abstract empty-fixed-before-stored flush markers to `FlushEvent` and final flush config; private sampled `.xlsx` exact coverage improved 79.5% -> 83.6%, observed worksheet exacts 31 -> 49, mixed first-200 unchanged at 47.5% (2026-05-25 15:00 EDT)
+- [x] Add zlib L6 memLevel=9 fingerprint #29 after empirically finding ZIP-family streams use a 32767-symbol pending buffer while keeping hash behavior capped at 15 bits; mixed first-200 local ZIP-family coverage improved 47.5% -> 97.0% with #29 covering 131/200 streams (2026-05-25 16:10 EDT)
+- [x] Add oracle-backed zlib L6 memLevel=6/#31 and memLevel=7/#30 fingerprints for smaller pending-buffer variants; first-200 mixed corpus did not hit them yet, but they are byte-exact against the zlib oracle and keep the registry generic (2026-05-25 16:25 EDT)
 - [x] Move ZIP-family extension classification into tested core helper and cover `.war`, `.ear`, `.whl`, `.xpi`, `.crx`, `.vsix`, `.ods`, `.odp`, and `.cbz` in `zip-corpus-probe` discovery (2026-05-25 15:10 EDT)
 - [ ] Info-ZIP/Apple ZIP family: private CBZ JPEG streams are reproduced byte-exact by `/usr/bin/zip -6` but not by one-shot Ruby zlib L6/mem9; likely needs an Info-ZIP generator oracle and source-level reverse-engineering
 - [x] C FFI surface (`src/lib.zig` + `include/deflate_fingerprint.h`) exposes `dfp_identify`, `dfp_encode`, `dfp_free`, and versioning
@@ -124,6 +126,7 @@
   segmented `chain=16 nice=48 insert=4`, memLevel=7, plus additional sync
   flushes at 1024-row boundaries (`row1024` cluster) (2026-05-25 11:20 EDT)
 - [ ] Apple CF DEFLATE: zlib-derived or distinct?
+- [ ] Apple/iOS app payload DEFLATE cluster: remaining first-200 mixed misses show `dynamic:4096` and dynamic-then-stored fallbacks; Ruby zlib 1.2.12 level/mem/strategy sweep did not match sampled CodeResources, so investigate Apple/CoreFoundation or older bundled encoder behavior.
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration

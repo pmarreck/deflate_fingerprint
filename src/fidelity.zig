@@ -50,9 +50,9 @@ pub fn compressWithZlibMemLevel(
     strategy: Strategy,
     mem_level: c_int,
 ) ![]u8 {
-    // Worst-case output size per zlib's manual: input + (input>>12) + (input>>14)
-    //   + (input>>25) + 13. Add slack for empty-input case.
-    const cap: usize = raw.len + (raw.len >> 12) + (raw.len >> 14) + (raw.len >> 25) + 64;
+    // Test oracle capacity: zlib's tight default bound is not enough for
+    // non-default memLevels, which can emit many more stored-block headers.
+    const cap: usize = raw.len + (raw.len >> 5) + 4096;
     const out = try allocator.alloc(u8, cap);
     errdefer allocator.free(out);
 

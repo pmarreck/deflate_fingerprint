@@ -711,6 +711,18 @@ fn encodeZlibFastMemLevel(
     return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, chunkSymbolsForMemLevel(mem_level));
 }
 
+fn encodeZlibSlowMemLevel(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+) ![]u8 {
+    const adjusted = withMemLevel(params, mem_level);
+    const tokens = try lz77TokenizeSlow(allocator, raw, adjusted);
+    defer allocator.free(tokens);
+    return encodeMultiBlock3WayChunkedFromRaw(allocator, tokens, raw, chunkSymbolsForMemLevel(mem_level));
+}
+
 pub fn encodeZlibLevel1Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return encodeZlibFastMemLevel(allocator, raw, LZ77_LEVEL_1, 7);
 }
@@ -721,6 +733,24 @@ pub fn encodeZlibLevel2Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8
 
 pub fn encodeZlibLevel3Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return encodeZlibFastMemLevel(allocator, raw, LZ77_LEVEL_3, 7);
+}
+
+/// zlib level=6 with memLevel=7: smaller pending/hash buffers than the default
+/// memLevel=8, observed in some embedded ZIP-family payloads.
+pub fn encodeZlibLevel6Mem7(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeZlibSlowMemLevel(allocator, raw, LZ77_LEVEL_6, 7);
+}
+
+/// zlib level=6 with memLevel=6: 4095-symbol pending-buffer cadence, useful
+/// for reproducing small-buffer embedded DEFLATE streams.
+pub fn encodeZlibLevel6Mem6(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeZlibSlowMemLevel(allocator, raw, LZ77_LEVEL_6, 6);
+}
+
+/// zlib level=6 with memLevel=9: same lazy LZ77 parameters as normal L6, but
+/// with a 32767-symbol pending buffer and the observed 15-bit hash cap.
+pub fn encodeZlibLevel6Mem9(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return encodeZlibSlowMemLevel(allocator, raw, LZ77_LEVEL_6, 9);
 }
 
 // ─── Phase E tests ────────────────────────────────────────────────────────
@@ -846,6 +876,74 @@ test "encodeZlibLevel2/3Mem7 match real zlib with memLevel=7 on multi-block inpu
         defer testing.allocator.free(expected);
         try testing.expectEqualSlices(u8, expected, got);
     }
+}
+
+test "encodeZlibLevel6 matches real zlib memLevel=8 on incompressible multi-block input" {
+    const fidelity = @import("fidelity.zig");
+    const input = try testing.allocator.alloc(u8, 80_000);
+    defer testing.allocator.free(input);
+    var x: u32 = 0x1234_5678;
+    for (input) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+
+    const got = try encodeZlibLevel6(testing.allocator, input);
+    defer testing.allocator.free(got);
+    const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 6, .default, 8);
+    defer testing.allocator.free(expected);
+    try testing.expectEqualSlices(u8, expected, got);
+}
+
+test "encodeZlibLevel6Mem9 matches real zlib memLevel=9 on incompressible multi-block input" {
+    const fidelity = @import("fidelity.zig");
+    const input = try testing.allocator.alloc(u8, 80_000);
+    defer testing.allocator.free(input);
+    var x: u32 = 0x1234_5678;
+    for (input) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+
+    const got = try encodeZlibLevel6Mem9(testing.allocator, input);
+    defer testing.allocator.free(got);
+    const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 6, .default, 9);
+    defer testing.allocator.free(expected);
+    try testing.expectEqualSlices(u8, expected, got);
+}
+
+test "encodeZlibLevel6Mem7 matches real zlib memLevel=7 on incompressible multi-block input" {
+    const fidelity = @import("fidelity.zig");
+    const input = try testing.allocator.alloc(u8, 80_000);
+    defer testing.allocator.free(input);
+    var x: u32 = 0x1234_5678;
+    for (input) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+
+    const got = try encodeZlibLevel6Mem7(testing.allocator, input);
+    defer testing.allocator.free(got);
+    const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 6, .default, 7);
+    defer testing.allocator.free(expected);
+    try testing.expectEqualSlices(u8, expected, got);
+}
+
+test "encodeZlibLevel6Mem6 matches real zlib memLevel=6 on incompressible multi-block input" {
+    const fidelity = @import("fidelity.zig");
+    const input = try testing.allocator.alloc(u8, 80_000);
+    defer testing.allocator.free(input);
+    var x: u32 = 0x1234_5678;
+    for (input) |*b| {
+        x = x *% 1664525 +% 1013904223;
+        b.* = @truncate(x >> 24);
+    }
+
+    const got = try encodeZlibLevel6Mem6(testing.allocator, input);
+    defer testing.allocator.free(got);
+    const expected = try fidelity.compressWithZlibMemLevel(testing.allocator, input, 6, .default, 6);
+    defer testing.allocator.free(expected);
+    try testing.expectEqualSlices(u8, expected, got);
 }
 
 // Token-side dispatchers + emit primitives (encodeBlockFromTokensWithDynamic,

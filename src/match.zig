@@ -87,11 +87,12 @@ pub const LZ77_LEVEL_8_FILTERED: LZ77Params = .{ .max_chain_length = 1024, .good
 pub const LZ77_LEVEL_9_FILTERED: LZ77Params = .{ .max_chain_length = 4096, .good_match = 32, .nice_match = 258, .max_lazy_match = 258, .filtered = true };
 
 /// Return zlib-style LZ77 params adjusted for `memLevel`.
-/// zlib maps memLevel to hash_bits=memLevel+7 and hash_shift=ceil(hash_bits/3).
+/// The pending symbol buffer grows through memLevel=9, but observed raw zlib
+/// output keeps the hash regime capped at 15 bits for the 32 KiB DEFLATE window.
 pub fn withMemLevel(params: LZ77Params, mem_level: u4) LZ77Params {
     std.debug.assert(mem_level >= 1 and mem_level <= 9);
     var adjusted = params;
-    adjusted.hash_bits = @intCast(mem_level + 7);
+    adjusted.hash_bits = @intCast(@min(@as(u16, mem_level) + 7, 15));
     adjusted.hash_shift = @intCast((@as(u16, adjusted.hash_bits) + adjusted.min_match - 1) / adjusted.min_match);
     return adjusted;
 }
