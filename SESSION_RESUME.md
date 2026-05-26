@@ -344,6 +344,11 @@ Current probe check:
 - Mixed first-200 local ZIP-family run stayed at 47.5%, so the empty
   fixed-before-stored dial appears to close an OOXML/worksheet-shaped gap, not
   the broad non-OOXML ZIP-family gap.
+- ZIP-family extension discovery now includes `.war`, `.ear`, `.whl`, `.xpi`,
+  `.crx`, `.vsix`, `.ods`, `.odp`, and `.cbz`. Sampled XPI coverage is 78.6%;
+  ODS/ODP are 100%; sampled CBZ JPEG entries are 0% but are byte-exactly
+  reproduced by `/usr/bin/zip -6`, making Info-ZIP/Apple ZIP a high-value next
+  oracle.
 
 ## Recent commit log (most recent first)
 

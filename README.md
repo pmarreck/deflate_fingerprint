@@ -17,7 +17,7 @@ Active reverse-engineering / implementation project.
 - 28 fingerprints registered: zlib level 0, zlib levels 1-9 across default /
   fixed / filtered strategies, collapsed zlib HUFFMAN_ONLY and RLE fingerprints,
   plus zlib L1 explicit `SYNC_FLUSH` + empty finish handling.
-- `./test` currently passes 137 tests: Zig unit tests, CLI integration tests,
+- `./test` currently passes 139 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
@@ -35,7 +35,7 @@ Active reverse-engineering / implementation project.
   by zlib, libdeflate, 7-Zip, miniz, Go, .NET, Java, and Apple/CoreFoundation.
 - ZIP-container coverage is intentionally broad: `.zip`, `.jar`, `.war`,
   `.ear`, `.apk`, `.ipa`, `.whl`, `.xpi`, `.crx`, `.vsix`, `.odt`, `.ods`,
-  `.odp`, `.epub`, `.cbz`, and OOXML files should all reuse the same generic
+  `.odp`, `.epub`, `.cbz`, and OOXML files reuse the same generic
   method=8 entry walker before any format-specific metadata is layered on.
 
 ## Why it exists

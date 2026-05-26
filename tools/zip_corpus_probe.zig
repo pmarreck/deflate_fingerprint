@@ -688,30 +688,6 @@ fn parseArgs(allocator: std.mem.Allocator, args_in: std.process.Args) !Args {
     };
 }
 
-fn isZipExtension(name: []const u8) bool {
-    // Skip macOS AppleDouble resource-fork sidecars (._foo.zip etc.) — they
-    // are NOT real archives, just metadata blobs that happen to share a name.
-    if (std.mem.startsWith(u8, name, "._")) return false;
-    const exts = [_][]const u8{ ".zip", ".docx", ".jar", ".epub", ".odt", ".xlsx", ".pptx", ".apk", ".war", ".ipa" };
-    for (exts) |ext| {
-        if (name.len >= ext.len) {
-            const tail = name[name.len - ext.len ..];
-            // Case-insensitive ASCII compare.
-            var eq = true;
-            for (tail, ext) |a, b| {
-                const al = if (a >= 'A' and a <= 'Z') a + 32 else a;
-                const bl = if (b >= 'A' and b <= 'Z') b + 32 else b;
-                if (al != bl) {
-                    eq = false;
-                    break;
-                }
-            }
-            if (eq) return true;
-        }
-    }
-    return false;
-}
-
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
@@ -732,7 +708,7 @@ pub fn main(init: std.process.Init) !void {
 
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!isZipExtension(entry.basename)) continue;
+        if (!dfp.zip_family.isZipFamilyFilename(entry.basename)) continue;
         if (args.max_streams) |lim| {
             if (stats.entries_deflate >= lim) break;
         }

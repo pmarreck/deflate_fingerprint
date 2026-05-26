@@ -380,3 +380,23 @@ fixed-tree savings for this many distinct symbols at this input length.
 
 These become the failing-test anchors for `encodeDynamicHuffmanLiterals`.
 
+### Info-ZIP / Apple ZIP — CBZ JPEG streams
+**Date:** 2026-05-25
+**Probe:** private local CBZ sample, sanitized aggregate only
+**Reference:** `/usr/bin/zip` 3.0 with Apple modifications
+
+Private CBZ JPEG entries showed a consistent non-zlib-registry miss shape:
+large DYNAMIC blocks with a 32,767-token cadence. One representative stream
+was reproduced byte-exact by recompressing the inflated JPEG with
+`/usr/bin/zip -6` and extracting the ZIP member's raw DEFLATE payload.
+
+The same raw bytes compressed through Ruby zlib 1.2.12 with one-shot raw
+DEFLATE at default strategy, level 6, memLevel 9 produced the same compressed
+length but not the same bytes; first divergence occurred early in the first
+block, and block inspection showed the target's first 32,767 tokens covered
+one more raw byte than the Ruby-zlib stream.
+
+**Implication:** this is likely an Info-ZIP/Apple ZIP encoder-family behavior
+or zlib integration detail, not merely the existing zlib model with a different
+`memLevel`. Treat Info-ZIP as a first-class generator oracle target before
+trying to promote a generic fingerprint.
