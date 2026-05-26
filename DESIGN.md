@@ -12,6 +12,21 @@ This is the critical design decision. Bundling external encoder libraries at run
 - Forensically reproducible — anyone can read the Zig source and verify a fingerprint
 - Statically linkable; cross-platform without architecture-specific quirks
 
+## Prior-art bar
+
+`precomp`, `preflate`, `preflate-rs`, `grittibanzli`, and `reflate` show that
+DEFLATE recompression is feasible. DFP's differentiator is not the bare idea of
+splitting DEFLATE into plaintext plus reconstruction data. DFP must be:
+
+- **more attributable:** expose encoder-family/config evidence and confidence,
+  not just enough bytes to reconstruct;
+- **more embeddable:** Zig core, C FFI, no restore-time dependency on external
+  encoder runtimes;
+- **more measurable:** corpus reports classify exact hits, corrected hits,
+  stored-original fallbacks, and remaining misses by producer/container;
+- **more explicit:** a versioned registry and surrogate container schema that
+  upstream tools such as blar can depend on.
+
 ## Coverage prioritization: open source first
 
 Open-source encoders are the v0.1–v0.2 priority because their algorithms are

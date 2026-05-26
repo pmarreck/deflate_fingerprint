@@ -44,6 +44,57 @@ observable behavior, and corpus ideas.
   stream whether corrected recompression beats storing the original DEFLATE
   blob.
 
+## Where DFP Must Exceed Prior Art
+
+Prior art proves the category is real. DFP needs to be better in at least one
+clear dimension to justify new implementation work.
+
+Target differentiators:
+
+- **Forensic attribution, not just recompression.** Existing systems primarily
+  optimize storage. DFP should expose the recovered encoder family, parameters,
+  confidence, competing candidates, and corpus-derived evidence in a stable API
+  and CLI report.
+- **Transparent, append-only fingerprint registry.** Fingerprints should be
+  named, versioned, documented, and reproducible from public generator-oracle
+  tests. Users should be able to ask "why was this stream called zlib L6
+  memLevel=9?" and inspect the evidence.
+- **Zig core plus C FFI as the first-class product.** DFP should remain easy to
+  embed from C, Swift, C#, Java, Rust, scripting runtimes, and forensic tools
+  without pulling in Rust/C++ runtimes or external compressor libraries at
+  restore time.
+- **Corpus coverage as a measured artifact.** DFP should publish coverage by
+  container family, producer, encoder, stream size bucket, and correction
+  overhead. A stream is not merely "handled"; its behavior is classified.
+- **Container-agnostic RFC 1951 core with adapter evidence.** Precomp-style
+  container support is useful, but DFP's core should stay raw-DEFLATE while
+  test adapters prove coverage for ZIP-family, PNG, PDF, gzip, iWork, Office,
+  EPUB, APK/JAR/WHL/XPI/VSIX, and similar sources.
+- **Native fallback economics.** The packer should always choose the smaller of
+  corrected recompression and stored-original DEFLATE, making worst-case output
+  predictable and safe for upstream archivers.
+- **Clean-room extensibility for new encoders.** Adding libdeflate, zlib-ng,
+  miniz, Go, .NET, Java, Apple/CoreFoundation, or legacy PKZIP should mean
+  adding observable parameters, oracle fixtures, and tests, not grafting in an
+  opaque foreign encoder.
+- **Potential `difz` integration as an outer fallback.** If Peter adds
+  bit-oriented sliding-window mode to `difz`, DFP can benchmark it as a
+  last-resort packed-stream residual. The project should still prefer typed
+  DEFLATE corrections when parsing succeeds.
+
+Candidate v1.0 "exceeds prior art" success criteria:
+
+- Publicly documented registry entries for every exact predictor, including
+  source evidence and reproduction tests.
+- Exact raw-DEFLATE reconstruction for known zlib-family streams with zero or
+  near-zero correction overhead.
+- Corrected round-trip for arbitrary valid RFC 1951 streams, subject to the
+  per-stream stored-original fallback rule.
+- Coverage reports across real and generated corpora, including correction
+  overhead histograms and miss classifications.
+- Stable C FFI for `fingerprint`, `compress`, `decompress`, `pack`, and
+  `unpack`.
+
 ## Relationship To `difz`
 
 `difz` is a strong byte-level binary differ using CDC, Myers gap refinement,

@@ -9,6 +9,10 @@ reconstruct the original compressed bytes from the original data. When no
 finite parameter set reproduces a stream exactly, the output may also include a
 compact DEFLATE-aware correction stream over token/block/Huffman decisions.
 
+Because prior art exists, DFP must exceed it in a clear dimension. The project
+is not merely a precompressor; it is a forensic, embeddable, registry-backed
+DEFLATE reproduction engine with measured corpus coverage and a stable C FFI.
+
 ## Why this matters
 
 DEFLATE (RFC 1951) defines decoding exactly, but leaves encoding largely free. Different encoders, and even the same encoder at different "levels," produce different bytes for the same input. This under-specification is responsible for a class of problems across multiple domains:
@@ -89,6 +93,12 @@ Two `.docx` files with identical content but different DEFLATE encoders deduplic
 - Stable fingerprint registry format with backwards-compatibility guarantee.
 - Integration tested with Mecha Archiver/blar as the byte-identity backstop for major DEFLATE-bearing formats, including ZIP-family files, PNG, PDF, gzip, and iWork/Office documents.
 - Forensics community feedback / case studies.
+- Public coverage reports by encoder/container/producer, including correction
+  overhead histograms and miss classifications.
+- Stable C FFI for raw primitives and the higher-level surrogate codec:
+  `fingerprint`, `compress`, `decompress`, `pack`, and `unpack`.
+- Documented evidence trail for registry entries so attribution is explainable,
+  not just operationally byte-correct.
 
 ## Non-goals
 
