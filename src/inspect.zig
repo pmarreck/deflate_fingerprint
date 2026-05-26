@@ -27,11 +27,13 @@ pub const BlockInfo = struct {
 
 pub const ObservedFlushEvent = struct {
     raw_offset: usize,
+    empty_fixed_blocks_before: usize,
     empty_stored_blocks: usize,
 };
 
 pub const ObservedFlushSchedule = struct {
     sync_flushes: []ObservedFlushEvent,
+    final_flush_empty_fixed_blocks_before: usize,
     final_flush_empty_stored_blocks: usize,
     has_empty_fixed_finish: bool,
 
@@ -434,9 +436,13 @@ pub fn inspectBlocks(allocator: std.mem.Allocator, deflate: []const u8) ![]Block
     return blocks.toOwnedSlice(allocator);
 }
 
+fn isEmptyMarkerBlock(block: BlockInfo) bool {
+    return block.raw_start == block.raw_end and block.token_count == 0;
+}
+
 /// Infer explicit flush topology from a target DEFLATE stream by grouping
-/// consecutive empty STORED blocks at the same raw offset. This produces
-/// deterministic config data; producer/container names are not involved.
+/// empty marker blocks at the same raw offset. This captures both empty FIXED
+/// pre-markers and empty STORED sync markers without producer/container names.
 pub fn observeFlushSchedule(allocator: std.mem.Allocator, deflate: []const u8) !ObservedFlushSchedule {
     const blocks = try inspectBlocks(allocator, deflate);
     defer allocator.free(blocks);
@@ -445,43 +451,55 @@ pub fn observeFlushSchedule(allocator: std.mem.Allocator, deflate: []const u8) !
     errdefer sync_flushes.deinit(allocator);
 
     const final_raw = if (blocks.len == 0) 0 else blocks[blocks.len - 1].raw_end;
+    var final_flush_empty_fixed_blocks_before: usize = 0;
     var final_flush_empty_stored_blocks: usize = 0;
     var has_empty_fixed_finish = false;
 
     var i: usize = 0;
     while (i < blocks.len) {
         const block = blocks[i];
-        if (block.block_type == .fixed and block.raw_start == block.raw_end and block.token_count == 0 and block.bfinal) {
+        if (block.block_type == .fixed and isEmptyMarkerBlock(block) and block.bfinal) {
             has_empty_fixed_finish = true;
+            i += 1;
+            continue;
         }
-        if (block.block_type != .stored or block.raw_start != block.raw_end) {
+        if (!isEmptyMarkerBlock(block) or (block.block_type != .fixed and block.block_type != .stored)) {
             i += 1;
             continue;
         }
 
         const raw_offset = block.raw_start;
-        var count: usize = 0;
-        while (i < blocks.len and
-            blocks[i].block_type == .stored and
-            blocks[i].raw_start == raw_offset and
-            blocks[i].raw_end == raw_offset)
-        {
-            count += 1;
+        var fixed_count: usize = 0;
+        var stored_count: usize = 0;
+        while (i < blocks.len and isEmptyMarkerBlock(blocks[i]) and blocks[i].raw_start == raw_offset) {
+            if (blocks[i].block_type == .fixed and blocks[i].bfinal) {
+                has_empty_fixed_finish = true;
+                i += 1;
+                break;
+            }
+            switch (blocks[i].block_type) {
+                .fixed => fixed_count += 1,
+                .stored => stored_count += 1,
+                else => break,
+            }
             i += 1;
         }
 
         if (raw_offset == final_raw) {
-            final_flush_empty_stored_blocks += count;
+            final_flush_empty_fixed_blocks_before += fixed_count;
+            final_flush_empty_stored_blocks += stored_count;
         } else {
             try sync_flushes.append(allocator, .{
                 .raw_offset = raw_offset,
-                .empty_stored_blocks = count,
+                .empty_fixed_blocks_before = fixed_count,
+                .empty_stored_blocks = stored_count,
             });
         }
     }
 
     return .{
         .sync_flushes = try sync_flushes.toOwnedSlice(allocator),
+        .final_flush_empty_fixed_blocks_before = final_flush_empty_fixed_blocks_before,
         .final_flush_empty_stored_blocks = final_flush_empty_stored_blocks,
         .has_empty_fixed_finish = has_empty_fixed_finish,
     };
@@ -674,9 +692,40 @@ test "observeFlushSchedule groups internal and final empty stored blocks" {
 
     try testing.expectEqual(@as(usize, 2), observed.sync_flushes.len);
     try testing.expectEqual(@as(usize, 6), observed.sync_flushes[0].raw_offset);
+    try testing.expectEqual(@as(usize, 0), observed.sync_flushes[0].empty_fixed_blocks_before);
     try testing.expectEqual(@as(usize, 2), observed.sync_flushes[0].empty_stored_blocks);
     try testing.expectEqual(@as(usize, 11), observed.sync_flushes[1].raw_offset);
+    try testing.expectEqual(@as(usize, 0), observed.sync_flushes[1].empty_fixed_blocks_before);
     try testing.expectEqual(@as(usize, 1), observed.sync_flushes[1].empty_stored_blocks);
+    try testing.expectEqual(@as(usize, 0), observed.final_flush_empty_fixed_blocks_before);
+    try testing.expectEqual(@as(usize, 1), observed.final_flush_empty_stored_blocks);
+    try testing.expectEqual(true, observed.has_empty_fixed_finish);
+}
+
+test "observeFlushSchedule captures empty fixed markers before stored flushes" {
+    const raw = "alpha beta gamma";
+    const flushes = [_]encoder.FlushEvent{.{
+        .raw_offset = 6,
+        .empty_fixed_blocks_before = 1,
+        .empty_stored_blocks = 1,
+    }};
+    const deflated = try encoder.encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = encoder.LZ77_LEVEL_1,
+        .mem_level = 7,
+        .sync_flushes = &flushes,
+        .final_flush_empty_fixed_blocks_before = 1,
+        .final_flush_empty_stored_blocks = 1,
+    });
+    defer testing.allocator.free(deflated);
+
+    const observed = try observeFlushSchedule(testing.allocator, deflated);
+    defer observed.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), observed.sync_flushes.len);
+    try testing.expectEqual(@as(usize, 6), observed.sync_flushes[0].raw_offset);
+    try testing.expectEqual(@as(usize, 1), observed.sync_flushes[0].empty_fixed_blocks_before);
+    try testing.expectEqual(@as(usize, 1), observed.sync_flushes[0].empty_stored_blocks);
+    try testing.expectEqual(@as(usize, 1), observed.final_flush_empty_fixed_blocks_before);
     try testing.expectEqual(@as(usize, 1), observed.final_flush_empty_stored_blocks);
     try testing.expectEqual(true, observed.has_empty_fixed_finish);
 }

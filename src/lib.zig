@@ -221,6 +221,7 @@ fn cloneObservedFlushEvents(
     for (observed.sync_flushes, 0..) |flush, i| {
         flushes[i] = .{
             .raw_offset = flush.raw_offset,
+            .empty_fixed_blocks_before = flush.empty_fixed_blocks_before,
             .empty_stored_blocks = flush.empty_stored_blocks,
         };
     }
@@ -259,6 +260,7 @@ pub fn fingerprintConfigured(
             .params = candidate.params,
             .mem_level = candidate.mem_level,
             .sync_flushes = flushes,
+            .final_flush_empty_fixed_blocks_before = schedule.final_flush_empty_fixed_blocks_before,
             .final_flush_empty_stored_blocks = schedule.final_flush_empty_stored_blocks,
             .finish_mode = .empty_fixed_block,
             .tokenization_mode = .segmented,
@@ -322,6 +324,7 @@ const CDeflateConfig = extern struct {
     max_match: u16,
     min_match: u8,
     mem_level: u8,
+    final_flush_empty_fixed_blocks_before: usize,
     tokenization_mode: u8,
     finish_mode: u8,
     filtered: u8,
@@ -367,6 +370,7 @@ fn configFromC(c: *const CDeflateConfig) !encoder.DeflateReproductionConfig {
         },
         .mem_level = mem_level,
         .sync_flushes = sync_flushes,
+        .final_flush_empty_fixed_blocks_before = c.final_flush_empty_fixed_blocks_before,
         .final_flush_empty_stored_blocks = c.final_flush_empty_stored_blocks,
         .finish_mode = finish,
         .tokenization_mode = mode,
@@ -514,6 +518,7 @@ test "dfp_encode_configured: raw-offset flushes are exposed through C FFI" {
         .max_match = 258,
         .min_match = 3,
         .mem_level = 7,
+        .final_flush_empty_fixed_blocks_before = 0,
         .tokenization_mode = C_TOKENIZATION_SEGMENTED,
         .finish_mode = C_FINISH_EMPTY_FIXED_BLOCK,
         .filtered = 0,
@@ -568,10 +573,34 @@ test "fingerprintConfigured recovers observed flush topology and exact config re
     try std.testing.expectEqual(@as(usize, 1), result.config.final_flush_empty_stored_blocks);
     try std.testing.expectEqual(@as(usize, 2), result.config.sync_flushes.len);
     try std.testing.expectEqual(@as(usize, 11), result.config.sync_flushes[0].raw_offset);
+    try std.testing.expectEqual(@as(usize, 0), result.config.sync_flushes[0].empty_fixed_blocks_before);
     try std.testing.expectEqual(@as(usize, 2), result.config.sync_flushes[0].empty_stored_blocks);
     try std.testing.expectEqual(raw.len - "</worksheet>".len, result.config.sync_flushes[1].raw_offset);
+    try std.testing.expectEqual(@as(usize, 0), result.config.sync_flushes[1].empty_fixed_blocks_before);
     try std.testing.expectEqual(@as(usize, 1), result.config.sync_flushes[1].empty_stored_blocks);
 
+    const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
+    defer std.testing.allocator.free(reproduced);
+    try std.testing.expectEqualSlices(u8, target, reproduced);
+}
+
+test "fingerprintConfigured recovers empty fixed markers before final stored flush" {
+    const raw = "<worksheet><sheetData><row r=\"1\"><c>A</c></row></sheetData></worksheet>";
+    const target = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, .{
+        .params = fastObservedParams(48),
+        .mem_level = 7,
+        .sync_flushes = &.{},
+        .final_flush_empty_fixed_blocks_before = 1,
+        .final_flush_empty_stored_blocks = 1,
+        .tokenization_mode = .segmented,
+    });
+    defer std.testing.allocator.free(target);
+
+    var result = (try fingerprintConfigured(std.testing.allocator, raw, target)) orelse return error.ExpectedConfigMatch;
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.config.final_flush_empty_fixed_blocks_before);
+    try std.testing.expectEqual(@as(usize, 1), result.config.final_flush_empty_stored_blocks);
     const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
     defer std.testing.allocator.free(reproduced);
     try std.testing.expectEqualSlices(u8, target, reproduced);

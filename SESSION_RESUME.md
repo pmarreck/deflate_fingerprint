@@ -333,13 +333,17 @@ Current probe check:
   `tests/corpus/corpus_local/` / private corpora, plus a tested NAS sampler
   with atomic inventory caching under `.dfp-private/`.
 - Small private NAS sample, ZIP probe aggregate results only:
-  - 3 `.xlsx`: 488 DEFLATE streams, 325 registry hits, 63 configured exact hits,
-    100 misses, 79.5% exact coverage.
+  - 3 `.xlsx`: 488 DEFLATE streams, 325 registry hits, 83 configured exact hits,
+    80 misses, 83.6% exact coverage after modeling empty fixed markers before
+    empty stored flush markers.
   - 1 `.docx`: 18/18 registry hits, 100.0% exact coverage.
   - 2 `.pptx`: 302 DEFLATE streams, 220 registry hits, 79 configured exact
     hits, 3 misses, 99.0% exact coverage.
   - 3 EPUBs: 160 DEFLATE streams, 159 registry hits, 1 miss, 99.4% exact
     coverage.
+- Mixed first-200 local ZIP-family run stayed at 47.5%, so the empty
+  fixed-before-stored dial appears to close an OOXML/worksheet-shaped gap, not
+  the broad non-OOXML ZIP-family gap.
 
 ## Recent commit log (most recent first)
 

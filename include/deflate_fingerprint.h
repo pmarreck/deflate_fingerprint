@@ -45,6 +45,7 @@ typedef struct {
 
 typedef struct {
     size_t raw_offset;
+    size_t empty_fixed_blocks_before;
     size_t empty_stored_blocks;
 } dfp_flush_event_t;
 
@@ -56,6 +57,7 @@ typedef struct {
     uint16_t max_match;
     uint8_t  min_match;
     uint8_t  mem_level;
+    size_t   final_flush_empty_fixed_blocks_before;
     uint8_t  tokenization_mode;  /* DFP_TOKENIZATION_* */
     uint8_t  finish_mode;        /* DFP_FINISH_*       */
     uint8_t  filtered;           /* 0=false, nonzero=true */

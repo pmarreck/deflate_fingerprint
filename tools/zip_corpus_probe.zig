@@ -129,6 +129,7 @@ fn observedFlushEvents(
     for (observed.sync_flushes, 0..) |flush, i| {
         flushes[i] = .{
             .raw_offset = flush.raw_offset,
+            .empty_fixed_blocks_before = flush.empty_fixed_blocks_before,
             .empty_stored_blocks = flush.empty_stored_blocks,
         };
     }
@@ -181,12 +182,14 @@ fn encodeConfiguredCandidate(
     params: dfp.encoder.LZ77Params,
     mem_level: u4,
     flushes: []const dfp.encoder.FlushEvent,
+    final_flush_empty_fixed_blocks_before: usize,
     final_flush_empty_stored_blocks: usize,
 ) ![]u8 {
     return dfp.encoder.encodeConfiguredDeflate(allocator, raw, .{
         .params = params,
         .mem_level = mem_level,
         .sync_flushes = flushes,
+        .final_flush_empty_fixed_blocks_before = final_flush_empty_fixed_blocks_before,
         .final_flush_empty_stored_blocks = final_flush_empty_stored_blocks,
         .tokenization_mode = .segmented,
     });
@@ -198,7 +201,7 @@ fn encodeWorksheetCandidate(allocator: std.mem.Allocator, raw: []const u8, nice_
     for (flushes.offsets[0..flushes.len], 0..) |offset, i| {
         events_buf[i] = .{ .raw_offset = offset, .empty_stored_blocks = 2 };
     }
-    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), 7, events_buf[0..flushes.len], 1);
+    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), 7, events_buf[0..flushes.len], 0, 1);
 }
 
 fn encodeWorksheetRowChunkCandidate(
@@ -214,7 +217,7 @@ fn encodeWorksheetRowChunkCandidate(
     for (offsets, 0..) |offset, i| {
         flushes[i] = .{ .raw_offset = offset, .empty_stored_blocks = 2 };
     }
-    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), 7, flushes, 1);
+    return encodeConfiguredCandidate(allocator, raw, fastParams(nice_match), 7, flushes, 0, 1);
 }
 
 /// Scan backwards from the end of `buf` to find the EOCD signature.
@@ -437,6 +440,7 @@ fn processDeflateEntry(
                             dfp.encoder.LZ77_LEVEL_1,
                             candidate_spec.mem_level,
                             flushes,
+                            schedule.final_flush_empty_fixed_blocks_before,
                             schedule.final_flush_empty_stored_blocks,
                         ) catch null;
                         if (got) |candidate| {
@@ -467,6 +471,7 @@ fn processDeflateEntry(
                             fastParams(candidate_spec.nice),
                             7,
                             flushes,
+                            schedule.final_flush_empty_fixed_blocks_before,
                             schedule.final_flush_empty_stored_blocks,
                         ) catch null;
                         if (got) |candidate| {
