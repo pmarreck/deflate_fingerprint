@@ -405,13 +405,13 @@ Current probe check:
   per-block type choices are implemented and tested, but these two exceptions
   now look like parser-variant or token-level-correction work rather than
   boundary storage.
-- Hash-chain visibility diagnostics are implemented. Continuous-prefix replay
-  sees both the target and zlib choices (`target-prefix-visible` and
-  `zlib-prefix-visible` are non-null), while row-chunked replay sees the target
-  but not zlib's actual choice (`zlib-row-visible: not-visible`). This means
-  the current row-flush state replay is not faithful enough yet. Next step:
-  instrument real zlib or port more of `deflate_slow` flush-boundary state to
-  learn which hash/lazy state survives `Z_PARTIAL_FLUSH`.
+- Hash-chain visibility diagnostics now model zlib's delayed `insert` carry
+  across `Z_PARTIAL_FLUSH`: the last two strings before a flush are inserted
+  only after the next input chunk supplies enough lookahead. With that state
+  included, row-chunked replay sees both the target and real-zlib choices at
+  the remaining PNG row divergences. The residual is now parser-choice or
+  token-level correction work: the target choices are legal and visible, but
+  lower-ranked than zlib's default lazy-parser choices.
 - New generic config dials exposed in Zig and C FFI: `parse_mode`, explicit
   `block_token_counts`, `block_raw_end_offsets`, `block_modes`, and
   `empty_fixed_after_block_counts`. Core still does not name PNG, Excel,

@@ -382,8 +382,9 @@ pub fn enumerateVisibleMatchesSlow(
 }
 
 /// Same as `enumerateVisibleMatchesSlow`, but forces the lazy parser to finish
-/// at fixed raw chunks while preserving hash history. This models producers
-/// that stream input through repeated flush calls, such as PNG scanline flushes.
+/// at fixed raw chunks while preserving hash history. It also replays zlib's
+/// delayed `insert` carry, where the last two strings before a flush are added
+/// to the hash chains only after the next chunk provides enough lookahead.
 pub fn enumerateVisibleMatchesSlowChunked(
     allocator: std.mem.Allocator,
     raw: []const u8,
@@ -409,6 +410,7 @@ pub fn enumerateVisibleMatchesSlowChunked(
 
     var strstart: usize = 0;
     var ins_h: u32 = 0;
+    var pending_insert: usize = 0;
 
     if (visible_end >= 2) {
         ins_h = ((@as(u32, raw[0]) << params.hash_shift) ^ @as(u32, raw[1])) & hash_mask;
@@ -423,6 +425,26 @@ pub fn enumerateVisibleMatchesSlowChunked(
         var match_length: u16 = params.min_match - 1;
         var match_start: u32 = 0;
         var match_available: bool = false;
+
+        if (pending_insert != 0) {
+            var insert = pending_insert;
+            const lookahead = segment_end - strstart;
+            if (lookahead + insert >= params.min_match) {
+                var str = strstart - insert;
+                ins_h = raw[str];
+                ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[str + 1])) & hash_mask;
+                while (insert != 0) {
+                    ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[str + params.min_match - 1])) & hash_mask;
+                    const ph = head[ins_h];
+                    prev[str & win_mask] = ph;
+                    head[ins_h] = @intCast(str);
+                    str += 1;
+                    insert -= 1;
+                    if (lookahead + insert < params.min_match) break;
+                }
+            }
+            pending_insert = insert;
+        }
 
         while (strstart < segment_end) {
             var lookahead = segment_end - strstart;
@@ -487,6 +509,8 @@ pub fn enumerateVisibleMatchesSlowChunked(
                 strstart += 1;
             }
         }
+
+        pending_insert = @min(strstart, params.min_match - 1);
     }
 
     return candidates.toOwnedSlice(allocator);
@@ -635,4 +659,12 @@ test "enumerateVisibleMatchesSlow respects bounded lookahead" {
 
     try testing.expect(findMatch(full, .{ .length = 3, .distance = 4 }) != null);
     try testing.expectEqual(@as(usize, 0), bounded.len);
+}
+
+test "enumerateVisibleMatchesSlowChunked replays zlib delayed inserts across flush chunks" {
+    const raw = "Axyxyx";
+    const candidates = try enumerateVisibleMatchesSlowChunked(testing.allocator, raw, 3, raw.len, 3, LZ77_LEVEL_6);
+    defer testing.allocator.free(candidates);
+
+    try testing.expect(findMatch(candidates, .{ .length = 3, .distance = 2 }) != null);
 }

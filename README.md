@@ -99,8 +99,11 @@ care about it.
   bytes, runs the same fingerprint/config path, and reports sanitized
   aggregate miss features such as 4096-token dynamic blocks and empty fixed
   markers.
-  A private 25-PNG checkpoint improved from 76.0% to 88.0% exact coverage after
-  adding target-derived block-token plans and explicit parse-mode configs.
+  A private 25-PNG checkpoint improved from 76.0% to 92.0% exact coverage after
+  adding target-derived block-token plans, explicit parse-mode configs, and a
+  generic small-window filtered candidate. The two remaining row-like misses
+  are now narrowed to parser-choice or correction data: both target and zlib
+  choices are legal and hash-chain-visible under row partial-flush replay.
 - Will add corpus probes for PDF, iWork, gzip, and generator-oracle outputs from
   external DEFLATE implementations. Those tools may be development-only
   dependencies supplied by `flake.nix`.
