@@ -404,8 +404,14 @@ Current probe check:
   raw-end block plans, continuous-history raw-end plans, and explicit
   per-block type choices are implemented and tested, but these two exceptions
   now look like parser-variant or token-level-correction work rather than
-  boundary storage. Next diagnostic should enumerate zlib hash-chain-visible
-  candidates, not just all raw-legal matches.
+  boundary storage.
+- Hash-chain visibility diagnostics are implemented. Continuous-prefix replay
+  sees both the target and zlib choices (`target-prefix-visible` and
+  `zlib-prefix-visible` are non-null), while row-chunked replay sees the target
+  but not zlib's actual choice (`zlib-row-visible: not-visible`). This means
+  the current row-flush state replay is not faithful enough yet. Next step:
+  instrument real zlib or port more of `deflate_slow` flush-boundary state to
+  learn which hash/lazy state survives `Z_PARTIAL_FLUSH`.
 - New generic config dials exposed in Zig and C FFI: `parse_mode`, explicit
   `block_token_counts`, `block_raw_end_offsets`, `block_modes`, and
   `empty_fixed_after_block_counts`. Core still does not name PNG, Excel,
@@ -428,6 +434,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 181/181 green.
+3. Run `./test` — should be 183/183 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

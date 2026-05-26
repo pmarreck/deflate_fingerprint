@@ -161,12 +161,68 @@ fn printMatchRank(
     }
 }
 
+fn findVisibleMatchIndex(candidates: []const dfp.encoder.Match, needle: dfp.inspect.MatchToken) ?usize {
+    for (candidates, 0..) |candidate, i| {
+        if (candidate.length == needle.length and candidate.distance == needle.distance) return i;
+    }
+    return null;
+}
+
+fn zlibParamsForDiagnostics(level: c_int, strategy: c_int, mem_level: c_int) ?dfp.encoder.LZ77Params {
+    var params = switch (level) {
+        4 => dfp.encoder.LZ77_LEVEL_4,
+        5 => dfp.encoder.LZ77_LEVEL_5,
+        6 => dfp.encoder.LZ77_LEVEL_6,
+        7 => dfp.encoder.LZ77_LEVEL_7,
+        8 => dfp.encoder.LZ77_LEVEL_8,
+        9 => dfp.encoder.LZ77_LEVEL_9,
+        else => return null,
+    };
+    if (strategy == c.Z_FILTERED) params.filtered = true;
+    return dfp.encoder.withMemLevel(params, @intCast(mem_level));
+}
+
+fn printVisibleMatchRank(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    raw_start: usize,
+    visible_end: usize,
+    chunk_size: usize,
+    params: dfp.encoder.LZ77Params,
+    label: []const u8,
+    token: dfp.inspect.DecodedToken,
+) void {
+    const m = switch (token) {
+        .match => |match| match,
+        .literal => return,
+    };
+    const candidates = dfp.match.enumerateVisibleMatchesSlowChunked(allocator, raw, raw_start, visible_end, chunk_size, params) catch |err| {
+        std.debug.print("        {s}-visible: failed({s})\n", .{ label, @errorName(err) });
+        return;
+    };
+    defer allocator.free(candidates);
+
+    if (findVisibleMatchIndex(candidates, m)) |idx| {
+        std.debug.print(
+            "        {s}-visible: {d}/{d}\n",
+            .{ label, idx + 1, candidates.len },
+        );
+    } else {
+        std.debug.print(
+            "        {s}-visible: not-visible among {d}\n",
+            .{ label, candidates.len },
+        );
+    }
+}
+
 fn reportFirstTokenDivergence(
     allocator: std.mem.Allocator,
     raw: []const u8,
     candidate: []const u8,
     target: []const u8,
     window_size: usize,
+    row_size: usize,
+    visible_params: ?dfp.encoder.LZ77Params,
 ) void {
     const target_tokens = dfp.inspect.inspectTokens(allocator, target) catch |err| {
         std.debug.print("      token-divergence: target inspect failed({s})\n", .{@errorName(err)});
@@ -207,6 +263,14 @@ fn reportFirstTokenDivergence(
         std.debug.print("\n", .{});
         printMatchRank(allocator, raw, target_item.raw_start, window_size, "target", target_item.token);
         printMatchRank(allocator, raw, candidate_item.raw_start, window_size, "zlib", candidate_item.token);
+        if (visible_params) |params| {
+            const target_visible_end = @min(raw.len, ((target_item.raw_start / row_size) + 1) * row_size);
+            const candidate_visible_end = @min(raw.len, ((candidate_item.raw_start / row_size) + 1) * row_size);
+            printVisibleMatchRank(allocator, raw, target_item.raw_start, target_visible_end, target_visible_end, params, "target-prefix", target_item.token);
+            printVisibleMatchRank(allocator, raw, candidate_item.raw_start, candidate_visible_end, candidate_visible_end, params, "zlib-prefix", candidate_item.token);
+            printVisibleMatchRank(allocator, raw, target_item.raw_start, target_visible_end, row_size, params, "target-row", target_item.token);
+            printVisibleMatchRank(allocator, raw, candidate_item.raw_start, candidate_visible_end, row_size, params, "zlib-row", candidate_item.token);
+        }
         return;
     }
 
@@ -520,7 +584,16 @@ fn printRowFlushDiagnostics(
         defer allocator.free(candidate);
         if (best.diff < candidate.len) printByteWindow("zlib  ", candidate, best.diff);
         printBlockSummary(allocator, candidate);
-        reportFirstTokenDivergence(allocator, raw, candidate, target, @as(usize, 1) << @intCast(window_bits));
+        const visible_params = zlibParamsForDiagnostics(best.level, best.strategy_value, best.mem_level);
+        reportFirstTokenDivergence(
+            allocator,
+            raw,
+            candidate,
+            target,
+            @as(usize, 1) << @intCast(window_bits),
+            row_size,
+            visible_params,
+        );
     }
 }
 

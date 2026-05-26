@@ -367,6 +367,131 @@ pub fn lz77TokenizeRLE(allocator: std.mem.Allocator, raw: []const u8) ![]Token {
     return tokens.toOwnedSlice(allocator);
 }
 
+/// Replay zlib's `deflate_slow` hash-chain state up to `target_offset` and
+/// enumerate match choices visible through the chain at that exact position.
+/// `visible_end` bounds lookahead, modeling streaming calls that flush at row
+/// or semantic boundaries before the encoder can see future input.
+pub fn enumerateVisibleMatchesSlow(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    target_offset: usize,
+    visible_end: usize,
+    params: LZ77Params,
+) ![]Match {
+    return enumerateVisibleMatchesSlowChunked(allocator, raw, target_offset, visible_end, visible_end, params);
+}
+
+/// Same as `enumerateVisibleMatchesSlow`, but forces the lazy parser to finish
+/// at fixed raw chunks while preserving hash history. This models producers
+/// that stream input through repeated flush calls, such as PNG scanline flushes.
+pub fn enumerateVisibleMatchesSlowChunked(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    target_offset: usize,
+    visible_end: usize,
+    chunk_size: usize,
+    params: LZ77Params,
+) ![]Match {
+    var candidates: std.ArrayList(Match) = .empty;
+    errdefer candidates.deinit(allocator);
+    if (target_offset >= visible_end or visible_end > raw.len or chunk_size == 0) return candidates.toOwnedSlice(allocator);
+
+    const hash_size: usize = @as(usize, 1) << params.hash_bits;
+    const hash_mask: u32 = @intCast(hash_size - 1);
+    const win_mask: usize = params.window_size - 1;
+
+    var head = try allocator.alloc(u32, hash_size);
+    defer allocator.free(head);
+    @memset(head, 0);
+    var prev = try allocator.alloc(u32, params.window_size);
+    defer allocator.free(prev);
+    @memset(prev, 0);
+
+    var strstart: usize = 0;
+    var ins_h: u32 = 0;
+
+    if (visible_end >= 2) {
+        ins_h = ((@as(u32, raw[0]) << params.hash_shift) ^ @as(u32, raw[1])) & hash_mask;
+    } else if (visible_end == 1) {
+        ins_h = raw[0];
+    }
+
+    var segment_start: usize = 0;
+    while (segment_start < visible_end) : (segment_start += chunk_size) {
+        const segment_end = @min(visible_end, segment_start + chunk_size);
+        var prev_length: u16 = params.min_match - 1;
+        var match_length: u16 = params.min_match - 1;
+        var match_start: u32 = 0;
+        var match_available: bool = false;
+
+        while (strstart < segment_end) {
+            var lookahead = segment_end - strstart;
+            var hash_head: u32 = 0;
+            if (lookahead >= params.min_match) {
+                ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[strstart + params.min_match - 1])) & hash_mask;
+                hash_head = head[ins_h];
+                prev[strstart & win_mask] = hash_head;
+                head[ins_h] = @intCast(strstart);
+            }
+
+            prev_length = match_length;
+            match_length = params.min_match - 1;
+
+            if (strstart == target_offset) {
+                try appendVisibleMatchesFromChain(allocator, &candidates, raw, strstart, hash_head, prev, params, lookahead, win_mask, prev_length);
+                return candidates.toOwnedSlice(allocator);
+            }
+
+            if (hash_head != 0
+                and prev_length < params.max_lazy_match
+                and strstart > hash_head
+                and (strstart - hash_head) <= maxDist(params)
+                and lookahead >= params.min_match)
+            {
+                const result = longestMatch(raw, strstart, hash_head, prev, params, lookahead, win_mask, prev_length);
+                if (result.length >= params.min_match and result.length > prev_length) {
+                    match_length = result.length;
+                    match_start = result.start;
+                }
+                const dist: usize = if (match_length >= params.min_match)
+                    @intCast(strstart - match_start)
+                else
+                    0;
+                const too_far_reject = match_length == params.min_match and dist > 4096;
+                const filtered_reject = params.filtered and match_length >= params.min_match and match_length <= 5;
+                if (too_far_reject or filtered_reject) {
+                    match_length = params.min_match - 1;
+                }
+            }
+
+            if (prev_length >= params.min_match and match_length <= prev_length) {
+                const max_insert: usize = strstart + lookahead - params.min_match;
+                lookahead -= prev_length - 1;
+                var remaining: u16 = prev_length - 2;
+                while (remaining != 0) : (remaining -= 1) {
+                    strstart += 1;
+                    if (strstart <= max_insert) {
+                        ins_h = ((ins_h << params.hash_shift) ^ @as(u32, raw[strstart + params.min_match - 1])) & hash_mask;
+                        const ph = head[ins_h];
+                        prev[strstart & win_mask] = ph;
+                        head[ins_h] = @intCast(strstart);
+                    }
+                }
+                match_available = false;
+                match_length = params.min_match - 1;
+                strstart += 1;
+            } else if (match_available) {
+                strstart += 1;
+            } else {
+                match_available = true;
+                strstart += 1;
+            }
+        }
+    }
+
+    return candidates.toOwnedSlice(allocator);
+}
+
 /// Result of `longestMatch`: the longest match length found, and the
 /// position (in `raw`) where it was found. Length 0 means no match
 /// satisfying `>= prev_length + 1` was found at any chain entry.
@@ -374,6 +499,53 @@ const MatchResult = struct {
     length: u16,
     start: u32,
 };
+
+fn appendVisibleMatchesFromChain(
+    allocator: std.mem.Allocator,
+    candidates: *std.ArrayList(Match),
+    raw: []const u8,
+    strstart: usize,
+    hash_head: u32,
+    prev: []const u32,
+    params: LZ77Params,
+    lookahead: usize,
+    win_mask: usize,
+    prev_length: u16,
+) !void {
+    if (hash_head == 0 or lookahead < params.min_match) return;
+
+    var chain_length: u32 = params.max_chain_length;
+    if (prev_length >= params.good_match) chain_length >>= 2;
+    const max_len: usize = @min(@as(usize, params.max_match), lookahead);
+    const md = maxDist(params);
+    const limit: usize = if (strstart > md) strstart - md else 0;
+    var cur_match: usize = hash_head;
+
+    while (true) {
+        if (cur_match >= strstart) break;
+        if (cur_match <= limit) break;
+
+        var n: usize = 0;
+        while (n < max_len and raw[strstart + n] == raw[cur_match + n]) : (n += 1) {}
+        if (n >= params.min_match) {
+            var length: usize = params.min_match;
+            while (length <= n) : (length += 1) {
+                try candidates.append(allocator, .{
+                    .length = @intCast(length),
+                    .distance = @intCast(strstart - cur_match),
+                });
+            }
+        }
+
+        chain_length -= 1;
+        if (chain_length == 0) break;
+
+        const next = prev[cur_match & win_mask];
+        if (next == 0) break;
+        if (next >= cur_match) break;
+        cur_match = next;
+    }
+}
 
 /// Walk the hash chain starting at `cur_match`, returning the longest
 /// match length AND the position where it was found. Honors zlib's
@@ -433,4 +605,34 @@ fn longestMatch(
         return .{ .length = best_len, .start = best_start };
     }
     return .{ .length = 0, .start = 0 };
+}
+
+const testing = std.testing;
+
+fn findMatch(candidates: []const Match, needle: Match) ?usize {
+    for (candidates, 0..) |candidate, i| {
+        if (candidate.length == needle.length and candidate.distance == needle.distance) return i;
+    }
+    return null;
+}
+
+test "enumerateVisibleMatchesSlow reports hash-chain visible matches at an offset" {
+    const raw = "xabcYabcZabc";
+    const candidates = try enumerateVisibleMatchesSlow(testing.allocator, raw, 9, raw.len, LZ77_LEVEL_6);
+    defer testing.allocator.free(candidates);
+
+    try testing.expect(findMatch(candidates, .{ .length = 3, .distance = 4 }) != null);
+    try testing.expect(findMatch(candidates, .{ .length = 3, .distance = 8 }) != null);
+    try testing.expect(findMatch(candidates, .{ .length = 3, .distance = 9 }) == null);
+}
+
+test "enumerateVisibleMatchesSlow respects bounded lookahead" {
+    const raw = "xabcYabc";
+    const full = try enumerateVisibleMatchesSlow(testing.allocator, raw, 5, raw.len, LZ77_LEVEL_6);
+    defer testing.allocator.free(full);
+    const bounded = try enumerateVisibleMatchesSlow(testing.allocator, raw, 5, 7, LZ77_LEVEL_6);
+    defer testing.allocator.free(bounded);
+
+    try testing.expect(findMatch(full, .{ .length = 3, .distance = 4 }) != null);
+    try testing.expectEqual(@as(usize, 0), bounded.len);
 }
