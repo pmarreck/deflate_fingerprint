@@ -375,10 +375,16 @@ Current probe check:
     Adler32, and IDAT chunk sizes.
   - `tools/png_corpus_probe.zig` walks `.png` files, inflates IDAT zlib data to
     PNG-filtered bytes, and runs registry/config identification against the raw
-    DEFLATE body.
+    DEFLATE body. Misses are now aggregated by sanitized block-shape features
+    so private corpus runs can be summarized without exposing filenames.
   - `tests/integration/png_probe.sh` generates a deterministic public PNG-like
     fixture and verifies the probe identifies its zlib stream. Full suite:
-    161/161 green.
+    163/163 green.
+- Private sampled PNG checkpoint (25 local/NAS samples, filenames intentionally
+  omitted): 19/25 exact (76.0%), with hits at fingerprints #3, #4, #24, #25,
+  and #27. All 6 misses inspected cleanly; all contain dynamic blocks, 2 contain
+  at least one 4096-token dynamic block, 4 contain fixed blocks, and 3 contain
+  empty fixed markers. No sampled miss used stored blocks.
 
 ## Recent commit log (most recent first)
 
@@ -397,6 +403,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 161/161 green.
+3. Run `./test` — should be 163/163 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

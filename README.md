@@ -19,7 +19,7 @@ Active reverse-engineering / implementation project.
   zlib L1 explicit `SYNC_FLUSH` + empty finish handling, and zlib L6
   memLevel 6/7/9 pending-buffer variants plus Info-ZIP-style 4096-symbol
   profitability flushes observed in ZIP-family streams.
-- `./test` currently passes 161 tests: Zig unit tests, CLI integration tests,
+- `./test` currently passes 163 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
@@ -95,7 +95,9 @@ care about it.
   `.odt`, `.ods`, `.cbz`, and similar files.
 - Includes a PNG IDAT probe that concatenates IDAT chunks, preserves zlib
   wrapper metadata, strips to the raw RFC 1951 body, inflates to PNG-filtered
-  bytes, and runs the same fingerprint/config path.
+  bytes, runs the same fingerprint/config path, and reports sanitized
+  aggregate miss features such as 4096-token dynamic blocks and empty fixed
+  markers.
 - Will add corpus probes for PDF, iWork, gzip, and generator-oracle outputs from
   external DEFLATE implementations. Those tools may be development-only
   dependencies supplied by `flake.nix`.

@@ -25,11 +25,46 @@ pub const BlockInfo = struct {
     token_count: usize,
 };
 
+pub const BlockFeatureSummary = struct {
+    has_dynamic_4096: bool = false,
+    has_empty_fixed_marker: bool = false,
+    has_empty_stored_marker: bool = false,
+    has_dynamic: bool = false,
+    has_fixed: bool = false,
+    has_stored: bool = false,
+    block_count: usize = 0,
+};
+
 pub const ObservedFlushEvent = struct {
     raw_offset: usize,
     empty_fixed_blocks_before: usize,
     empty_stored_blocks: usize,
 };
+
+/// Classify DEFLATE block-shape features for sanitized corpus reporting.
+/// This keeps private filenames out of reports while preserving signals such
+/// as PNG-style 4096-token blocks and explicit empty flush markers.
+pub fn summarizeBlockFeatures(blocks: []const BlockInfo) BlockFeatureSummary {
+    var summary: BlockFeatureSummary = .{ .block_count = blocks.len };
+    for (blocks) |block| {
+        switch (block.block_type) {
+            .dynamic => {
+                summary.has_dynamic = true;
+                if (block.token_count == 4096) summary.has_dynamic_4096 = true;
+            },
+            .fixed => {
+                summary.has_fixed = true;
+                if (block.token_count == 0) summary.has_empty_fixed_marker = true;
+            },
+            .stored => {
+                summary.has_stored = true;
+                if (block.raw_start == block.raw_end) summary.has_empty_stored_marker = true;
+            },
+            .reserved => {},
+        }
+    }
+    return summary;
+}
 
 pub const ObservedFlushSchedule = struct {
     sync_flushes: []ObservedFlushEvent,
@@ -545,6 +580,96 @@ pub fn inspectTokens(allocator: std.mem.Allocator, deflate: []const u8) ![]Token
 
 const testing = std.testing;
 const encoder = @import("encoder.zig");
+
+test "summarizeBlockFeatures classifies block-shape miss signals" {
+    const blocks = [_]BlockInfo{
+        .{
+            .index = 0,
+            .bfinal = false,
+            .block_type = .dynamic,
+            .compressed_start_bit = 0,
+            .compressed_end_bit = 10,
+            .raw_start = 0,
+            .raw_end = 8192,
+            .token_count = 4096,
+        },
+        .{
+            .index = 1,
+            .bfinal = false,
+            .block_type = .fixed,
+            .compressed_start_bit = 10,
+            .compressed_end_bit = 13,
+            .raw_start = 8192,
+            .raw_end = 8192,
+            .token_count = 0,
+        },
+        .{
+            .index = 2,
+            .bfinal = true,
+            .block_type = .stored,
+            .compressed_start_bit = 16,
+            .compressed_end_bit = 48,
+            .raw_start = 8192,
+            .raw_end = 8192,
+            .token_count = 0,
+        },
+    };
+
+    const summary = summarizeBlockFeatures(&blocks);
+
+    try testing.expectEqual(@as(usize, 3), summary.block_count);
+    try testing.expectEqual(true, summary.has_dynamic);
+    try testing.expectEqual(true, summary.has_dynamic_4096);
+    try testing.expectEqual(true, summary.has_fixed);
+    try testing.expectEqual(true, summary.has_empty_fixed_marker);
+    try testing.expectEqual(true, summary.has_stored);
+    try testing.expectEqual(true, summary.has_empty_stored_marker);
+}
+
+test "summarizeBlockFeatures does not infer markers from non-empty blocks" {
+    const blocks = [_]BlockInfo{
+        .{
+            .index = 0,
+            .bfinal = false,
+            .block_type = .dynamic,
+            .compressed_start_bit = 0,
+            .compressed_end_bit = 10,
+            .raw_start = 0,
+            .raw_end = 4096,
+            .token_count = 4095,
+        },
+        .{
+            .index = 1,
+            .bfinal = false,
+            .block_type = .fixed,
+            .compressed_start_bit = 10,
+            .compressed_end_bit = 30,
+            .raw_start = 4096,
+            .raw_end = 4097,
+            .token_count = 1,
+        },
+        .{
+            .index = 2,
+            .bfinal = true,
+            .block_type = .stored,
+            .compressed_start_bit = 32,
+            .compressed_end_bit = 72,
+            .raw_start = 4097,
+            .raw_end = 4098,
+            .token_count = 1,
+        },
+    };
+
+    const summary = summarizeBlockFeatures(&blocks);
+
+    try testing.expectEqual(@as(usize, 3), summary.block_count);
+    try testing.expectEqual(true, summary.has_dynamic);
+    try testing.expectEqual(false, summary.has_dynamic_4096);
+    try testing.expectEqual(true, summary.has_fixed);
+    try testing.expectEqual(false, summary.has_empty_fixed_marker);
+    try testing.expectEqual(true, summary.has_stored);
+    try testing.expectEqual(false, summary.has_empty_stored_marker);
+}
 
 test "inspectBlocks reports one stored block with compressed and raw ranges" {
     const raw = "Hello, world!";

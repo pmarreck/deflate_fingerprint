@@ -20,6 +20,13 @@ const Stats = struct {
     streams_identified: usize = 0,
     streams_configured_identified: usize = 0,
     streams_missed: usize = 0,
+    miss_inspect_failed: usize = 0,
+    miss_with_dynamic: usize = 0,
+    miss_with_dynamic_4096: usize = 0,
+    miss_with_fixed: usize = 0,
+    miss_with_empty_fixed_marker: usize = 0,
+    miss_with_stored: usize = 0,
+    miss_with_empty_stored_marker: usize = 0,
     hits_per_fp: [256]usize = [_]usize{0} ** 256,
 
     fn print(self: Stats, writer: anytype) !void {
@@ -49,6 +56,17 @@ const Stats = struct {
             }
         }
         if (!any) try writer.print("  (none)\n", .{});
+
+        if (self.streams_missed != 0) {
+            try writer.print("\nMiss features:\n", .{});
+            try writer.print("  inspect failed:       {d}\n", .{self.miss_inspect_failed});
+            try writer.print("  dynamic blocks:       {d}\n", .{self.miss_with_dynamic});
+            try writer.print("  dynamic 4096 tokens:  {d}\n", .{self.miss_with_dynamic_4096});
+            try writer.print("  fixed blocks:         {d}\n", .{self.miss_with_fixed});
+            try writer.print("  empty fixed markers:  {d}\n", .{self.miss_with_empty_fixed_marker});
+            try writer.print("  stored blocks:        {d}\n", .{self.miss_with_stored});
+            try writer.print("  empty stored markers: {d}\n", .{self.miss_with_empty_stored_marker});
+        }
     }
 };
 
@@ -108,6 +126,26 @@ fn printBlockSummary(allocator: std.mem.Allocator, compressed: []const u8) void 
     std.debug.print("\n", .{});
 }
 
+fn recordMissFeatures(
+    allocator: std.mem.Allocator,
+    compressed: []const u8,
+    stats: *Stats,
+) void {
+    const blocks = dfp.inspect.inspectBlocks(allocator, compressed) catch {
+        stats.miss_inspect_failed += 1;
+        return;
+    };
+    defer allocator.free(blocks);
+
+    const summary = dfp.inspect.summarizeBlockFeatures(blocks);
+    if (summary.has_dynamic) stats.miss_with_dynamic += 1;
+    if (summary.has_dynamic_4096) stats.miss_with_dynamic_4096 += 1;
+    if (summary.has_fixed) stats.miss_with_fixed += 1;
+    if (summary.has_empty_fixed_marker) stats.miss_with_empty_fixed_marker += 1;
+    if (summary.has_stored) stats.miss_with_stored += 1;
+    if (summary.has_empty_stored_marker) stats.miss_with_empty_stored_marker += 1;
+}
+
 fn processPng(
     allocator: std.mem.Allocator,
     path: []const u8,
@@ -150,6 +188,7 @@ fn processPng(
     }
 
     stats.streams_missed += 1;
+    recordMissFeatures(allocator, target, stats);
     if (verbose) {
         std.debug.print("  MISS {s}: raw={d} deflate={d} zlib={x:0>2}{x:0>2}\n", .{ path, raw.len, target.len, idat.cmf, idat.flg });
         printBlockSummary(allocator, target);
