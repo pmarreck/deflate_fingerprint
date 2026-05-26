@@ -44,10 +44,30 @@ For each candidate fingerprint F in the registry, in order of prior probability:
   4. If mismatch: abort F, advance to the next candidate.
   5. If full encode matches target_bytes byte-for-byte: F is the fingerprint.
 
-If no candidate matches: emit "unknown encoder" + a difz patch (if requested
-by caller) capturing the residual difference between the best near-match and
-the target.
+If no candidate matches exactly: emit the closest prediction plus a
+DEFLATE-aware correction stream, when requested by the caller. The correction
+stream is not a byte diff over the final compressed bytes. It records residual
+decisions before final bit packing: token choices, block splits, dynamic
+Huffman tree choices, stored/fixed/dynamic choices, and finish/flush markers.
+
+Then choose the storage representation per stream:
+
+1. `LZMA(raw) + fingerprint/config + correction`, when smaller.
+2. `original_deflate_blob`, when the correction stream is too large.
 ```
+
+### Why raw byte diffs are the wrong residual layer
+
+DEFLATE is bit-aligned. A single wrong literal-vs-match decision, block split,
+or dynamic-Huffman choice can shift the downstream bitstream by a non-byte
+number of bits. A byte-oriented differ then sees widespread byte changes that
+are mostly synchronization noise, not real information.
+
+The residual/correction layer therefore belongs over parsed DEFLATE events:
+LZ77 literals and length/distance pairs, block boundaries, block-type choices,
+and Huffman-tree decisions. A downstream byte differ such as `../difz` can still
+be useful after event-level realignment or for non-DEFLATE wrapper bytes, but
+the core reproduction miss should be encoded at the DEFLATE decision layer.
 
 ### Why early bailout is the whole performance story
 
@@ -72,7 +92,13 @@ The DEFLATE spec leaves these encoder choices free; they cascade deterministical
 | Empty-block / final-block-flag handling | Minor but observable. |
 | Pre-deflate filtering (PNG-specific: row filters) | Outside RFC 1951, but required adapter metadata for bit-exact PNG round-tripping and for explaining what bytes were fed into DEFLATE. |
 
-Most of these cascade from `(encoder_id, level, strategy, memLevel, window_bits)`. Once you fix that tuple, the encoder is deterministic.
+Many common encoder choices cascade from `(encoder_id, level, strategy,
+memLevel, window_bits)`. Once you fix that tuple, the encoder is deterministic.
+That is sufficient for broad zlib-family coverage, but it is not a complete
+model of every in-the-wild encoder. Optimal parsers such as zopfli, kzip, and
+some 7-Zip modes search over LZ77 parses rather than sampling zlib-style
+heuristic dials; their exact output may require a correction stream even when
+the closest fingerprint is known.
 
 ## Fingerprint registry
 
@@ -137,7 +163,7 @@ const dfp = @import("deflate_fingerprint");
 
 const result = try dfp.identify(allocator, raw_bytes, target_bytes, .{});
 // result.fingerprint_id != 0 if matched; ==0 means unknown
-// result.confidence: .byte_exact, .near_match (with residual diff bytes)
+// result.confidence: .byte_exact, .near_match (with DEFLATE event correction)
 
 // To reproduce the target:
 const reproduced = try dfp.encode(allocator, raw_bytes, result.fingerprint_id);

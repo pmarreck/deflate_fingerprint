@@ -4,8 +4,9 @@ depth=2
 max_lines=80
 
 annotate=[
-	LEARNINGS.md = Session learnings and environment/build observations worth preserving.
-	PLAN.md = Running checklist of completed and open work; current gaps include Apple/iOS payload DEFLATE and broader PNG/PDF/iWork adapters.
+	DESIGN.md = Design doc: includes event-level correction stream rationale and per-stream storage economics.
+	LEARNINGS.md = Session learnings including token-level residual requirement and environment/build observations.
+	PLAN.md = Running checklist: includes token/event correction stream and storage economics tasks.
 	README.md = Public overview: current status, blar/difz role, build commands, CLI surface.
 	SESSION_RESUME.md = Live handoff: latest private-corpus signal, 100% first-200 mixed ZIP-family coverage, and remaining xlsx worksheet gap.
 	cli/main.c = C CLI dogfooding the FFI; identify/help/about implemented, reproduce/list pending.

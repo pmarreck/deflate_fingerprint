@@ -69,8 +69,14 @@ The intended archive workflow is:
    fingerprint/config that best reproduces the original stream.
 4. On extract, call this encoder with that fingerprint to regenerate the
    DEFLATE stream.
-5. If the best reproduction is close but not exact, use `../difz` to store a
-   small residual binary patch and apply it during restore.
+5. If the best reproduction is close but not exact, store a compact
+   DEFLATE-aware correction stream and apply it during restore. This residual
+   must be described at the token/block/Huffman-decision level, not as a
+   naive byte diff of the final packed DEFLATE bytes, because one wrong
+   bit-aligned decision shifts every downstream byte.
+6. For each stream, choose the smaller representation: recompressed raw data
+   plus fingerprint/config/correction, or the original compressed bytes stored
+   as-is.
 
 The practical goal is to recover storage space from already-compressed formats
 without giving up byte-identical reconstruction for the archive audiences that
@@ -95,9 +101,10 @@ Long-term, this should become a general, highly configurable DEFLATE
 implementation:
 
 - "Extract"/identify path: return the best-guess fingerprint/config for an
-  observed compressed stream.
+  observed compressed stream, plus confidence and optional correction data.
 - Compress/reproduce path: accept an explicit fingerprint/config and emit the
-  corresponding DEFLATE bytes.
+  corresponding DEFLATE bytes, applying correction data when exact
+  reproduction cannot be expressed by config alone.
 - Default path: provide a sensible default encoder config, but keep
   reproduction driven by explicit configuration.
 
@@ -105,6 +112,14 @@ The main research loop is corpus-driven: produce outputs from known encoder
 implementations, harvest embedded DEFLATE streams from real files, classify
 their observed block/flush/token behavior, then promote only byte-exact generic
 reproductions into the fingerprint/config registry.
+
+For zlib-like and Info-ZIP-like streams, the intended correction payload is
+usually empty: the fingerprint/config alone should reproduce the target. For
+optimal or combinatorial encoders such as zopfli, kzip, and some 7-Zip modes,
+the parse can be structurally different from any zlib-heuristic prediction. In
+those cases, exact restoration is still possible, but economics must be decided
+per stream by comparing the corrected representation against storing the
+original DEFLATE blob.
 
 Corpus data is split into committed public fixtures and gitignored
 local/private corpora. See `docs/CORPUS_WORKFLOW.md` before sampling from a NAS

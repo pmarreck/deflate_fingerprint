@@ -71,6 +71,9 @@
 - [ ] Classify every miss mechanically by observed features: block type sequence, memLevel-like token cadence, flush schedule, first token divergence, Huffman header shape, and compressed-size neighborhood
 - [ ] Promote a behavior to registry/config only when the project can reproduce the stream byte-exactly from raw input and the config is expressed without producer-specific names in core code
 - [ ] Keep near-matches as corpus evidence for future work; do not rely on difz as a substitute for pursuing a real fingerprint unless the stream is genuinely outside the supported model
+- [ ] Define the event-level correction stream format: residuals over parsed DEFLATE decisions (LZ77 literals/matches, match-candidate hops, block splits, block types, Huffman tree choices, flush/finish markers), explicitly avoiding raw packed-byte diffs as the primary residual layer
+- [ ] Add per-stream storage economics scoring: compare `strong_compress(raw) + fingerprint/config + correction` against storing the original DEFLATE blob, and record the decision in corpus probe reports
+- [ ] Study precomp/preflate/preflate-rs/grittibanzli/reflate behavior and document which correction-stream ideas are compatible with this project's RFC 1951-only core and C FFI
 
 ## v0.2 — libdeflate + 7-Zip
 
@@ -140,7 +143,7 @@
 ## Cross-product coordination
 
 - [ ] Mecha Archiver (Phase 3a of [Mecha LLC release plan](../mecha_llc_website/docs/MECHA_RELEASE_PLAN.md)) integrates this library as the byte-identity backstop for ZIP-based formats
-- [ ] difz integration: when fingerprint detection produces a near-match instead of byte-exact, the residual is captured as a difz patch
+- [ ] difz integration: after DEFLATE event-level correction is defined, decide where `../difz` fits: wrapper/container residuals, already-realigned payloads, or a generic fallback when event correction is unavailable
 - [ ] BLIP/blar maintain their fully-open license posture (MIT/similar); deflate_fingerprint follows suit
 
 ## Completed

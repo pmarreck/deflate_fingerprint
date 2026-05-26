@@ -4,7 +4,10 @@
 
 Identify, with cryptographic precision, **which DEFLATE encoder implementation and parameter set produced a given compressed byte stream**, by reproducing the exact byte stream from the original uncompressed data using a small set of encoder candidates.
 
-The output is a *fingerprint*: a small (1–2 byte) identifier plus the parameters needed to reconstruct the original compressed bytes from the original data.
+The output is a *fingerprint*: a small identifier plus the parameters needed to
+reconstruct the original compressed bytes from the original data. When no
+finite parameter set reproduces a stream exactly, the output may also include a
+compact DEFLATE-aware correction stream over token/block/Huffman decisions.
 
 ## Why this matters
 
@@ -37,6 +40,12 @@ Two `.docx` files with identical content but different DEFLATE encoders deduplic
 - A **single Zig codebase** that implements DEFLATE encoding parameterized to match the byte-exact output of each target encoder.
 - A **fingerprint registry**: a versioned, human-readable list of (encoder family, version range, level, strategy, memLevel, ...) tuples that the encoder can reproduce.
 - A **detection algorithm**: given an uncompressed input + a target compressed stream, find which fingerprint (if any) reproduces the target bytes exactly. Stream-compare with early bailout to keep the per-candidate cost low.
+- A **correction model** for near-matches: encode residuals at the DEFLATE
+  decision layer (LZ77 tokens, block splits, block types, Huffman tree choices,
+  flush/finish markers), not as a naive byte diff after bit packing.
+- A **per-stream economics rule**: store recompressed raw data plus
+  fingerprint/config/correction only when that representation is smaller than
+  storing the original DEFLATE blob.
 - A **CLI** (Unix conventions per Mecha's standards) for end-users and forensics workflows: identify-encoder, reproduce-stream, list-known-fingerprints, etc.
 - A **Zig library** (`deflate_fingerprint` module + C FFI) for downstream consumers (Mecha Archiver, forensics tools, build-reproducibility checkers).
 - **Format adapters for testing/corpus extraction**: ZIP-family/OOXML/EPUB/iWork/PDF/PNG/gzip walkers that extract embedded RFC 1951 streams and enough adjacent metadata to validate byte-exact round-tripping. The core encoder remains DEFLATE-focused, but the project must prove coverage against real container formats.
@@ -50,6 +59,10 @@ Two `.docx` files with identical content but different DEFLATE encoders deduplic
 - DEFLATE *variants* outside RFC 1951 (e.g. raw zlib stream with `Z_HUFFMAN_ONLY` is in scope; DEFLATE64 / DEFLATE-Stream from 7-Zip is a separate format, possibly out of scope or v2.0).
 - Other compression algorithms (LZMA, bzip2, brotli, zstd) — separate projects if pursued.
 - Container bytes, wrappers, PNG filters, PDF object syntax, ZIP central directories, and iWork/OOXML/package structure are not the core encoder's responsibility. They are still in scope for corpus extraction and bit-exact integration tests so upstream tools such as blar can round-trip whole files.
+- Byte-level diffs of packed DEFLATE output are not the preferred correction
+  representation. They may still apply to wrappers/containers or already
+  realigned payloads, but the core DEFLATE residual should be token/event
+  aware to avoid bit-shift cascade bloat.
 
 ## Success criteria
 

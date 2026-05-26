@@ -326,6 +326,17 @@ Current probe check:
    promote only byte-exact generic configs into the registry. Near-matches stay
    as evidence and future work; difz is a downstream residual fallback, not a
    substitute for finding the real fingerprint.
+9. **Near-match correction layer**:
+   Do not diff final packed DEFLATE bytes as the primary residual. DEFLATE is
+   bit-aligned, so one wrong token or block decision can shift every downstream
+   byte and make a byte differ pay for synchronization noise. The correction
+   stream should be defined over parsed DEFLATE events: LZ77 token choices,
+   block boundaries/types, dynamic Huffman tree decisions, and flush/finish
+   markers. Byte-level diffs remain useful for wrappers/containers or after
+   event-level realignment. For zopfli/kzip/7-Zip optimal-parser streams,
+   expect structurally different LZ77 parses; use a per-stream decision rule to
+   choose corrected recompression only when it beats storing the original
+   DEFLATE blob.
 
 ## Latest sanitized private-corpus signal (2026-05-25 EDT)
 
