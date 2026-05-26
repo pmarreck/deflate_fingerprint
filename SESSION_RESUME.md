@@ -398,10 +398,14 @@ Current probe check:
   `Z_PARTIAL_FLUSH` per scanline reproduces the block topology almost exactly,
   but not byte-exactly: the first decoded-token divergences are
   `match(len=3,dist=1368)` vs `match(len=4,dist=1074)` in one stream and
-  `dist=667` vs `dist=666` in the other. Generic raw-end block plans,
-  continuous-history raw-end plans, and explicit per-block type choices are
-  implemented and tested, but these two exceptions now look like parser-variant
-  or token-level-correction work rather than boundary storage.
+  `dist=667` vs `dist=666` in the other. Legal match enumeration shows the
+  target choices are representable but low-ranked: rank 7/11 vs zlib rank 1/11
+  in one stream, and rank 70/78 vs zlib rank 69/78 in the other. Generic
+  raw-end block plans, continuous-history raw-end plans, and explicit
+  per-block type choices are implemented and tested, but these two exceptions
+  now look like parser-variant or token-level-correction work rather than
+  boundary storage. Next diagnostic should enumerate zlib hash-chain-visible
+  candidates, not just all raw-legal matches.
 - New generic config dials exposed in Zig and C FFI: `parse_mode`, explicit
   `block_token_counts`, `block_raw_end_offsets`, `block_modes`, and
   `empty_fixed_after_block_counts`. Core still does not name PNG, Excel,
@@ -424,6 +428,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 179/179 green.
+3. Run `./test` — should be 181/181 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

@@ -82,6 +82,8 @@ pub const MatchToken = struct {
     distance: u16,
 };
 
+pub const LegalMatchCandidate = MatchToken;
+
 pub const DecodedToken = union(enum) {
     literal: u8,
     match: MatchToken,
@@ -94,6 +96,54 @@ pub const TokenTraceItem = struct {
     raw_end: usize,
     token: DecodedToken,
 };
+
+fn legalMatchLess(_: void, lhs: LegalMatchCandidate, rhs: LegalMatchCandidate) bool {
+    if (lhs.length != rhs.length) return lhs.length > rhs.length;
+    return lhs.distance < rhs.distance;
+}
+
+/// Enumerate every legal RFC1951 LZ77 match visible at `offset`, sorted by
+/// likely usefulness: longest copy first, then nearest distance for ties.
+pub fn enumerateLegalMatches(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    offset: usize,
+    window_size: usize,
+    min_match: u16,
+    max_match: u16,
+) ![]LegalMatchCandidate {
+    var candidates: std.ArrayList(LegalMatchCandidate) = .empty;
+    errdefer candidates.deinit(allocator);
+    if (offset >= raw.len) return candidates.toOwnedSlice(allocator);
+
+    const max_dist = @min(offset, window_size);
+    var distance: usize = 1;
+    while (distance <= max_dist) : (distance += 1) {
+        const src = offset - distance;
+        var length: usize = 0;
+        const cap = @min(@as(usize, max_match), raw.len - offset);
+        while (length < cap and raw[src + length] == raw[offset + length]) : (length += 1) {}
+        if (length >= min_match) {
+            var n = @as(usize, min_match);
+            while (n <= length) : (n += 1) {
+                try candidates.append(allocator, .{
+                    .length = @intCast(n),
+                    .distance = @intCast(distance),
+                });
+            }
+        }
+    }
+
+    std.sort.heap(LegalMatchCandidate, candidates.items, {}, legalMatchLess);
+    return candidates.toOwnedSlice(allocator);
+}
+
+pub fn findLegalMatchIndex(candidates: []const LegalMatchCandidate, needle: LegalMatchCandidate) ?usize {
+    for (candidates, 0..) |candidate, i| {
+        if (candidate.length == needle.length and candidate.distance == needle.distance) return i;
+    }
+    return null;
+}
 
 pub const InspectError = error{
     UnexpectedEndOfStream,
@@ -796,6 +846,35 @@ test "inspectTokens emits dynamic-Huffman match length and distance" {
     try testing.expectEqual(@as(usize, 12), tokens[4].raw_end);
     try testing.expectEqual(@as(u16, 8), tokens[4].token.match.length);
     try testing.expectEqual(@as(u16, 3), tokens[4].token.match.distance);
+}
+
+test "enumerateLegalMatches ranks longer matches before nearer ties" {
+    const raw = "abcabcabc";
+    const candidates = try enumerateLegalMatches(testing.allocator, raw, 6, 32 * 1024, 3, 258);
+    defer testing.allocator.free(candidates);
+
+    try testing.expectEqual(@as(usize, 2), candidates.len);
+    try testing.expectEqual(@as(u16, 3), candidates[0].length);
+    try testing.expectEqual(@as(u16, 3), candidates[0].distance);
+    try testing.expectEqual(@as(u16, 3), candidates[1].length);
+    try testing.expectEqual(@as(u16, 6), candidates[1].distance);
+    try testing.expectEqual(@as(?usize, 0), findLegalMatchIndex(candidates, .{ .length = 3, .distance = 3 }));
+    try testing.expectEqual(@as(?usize, 1), findLegalMatchIndex(candidates, .{ .length = 3, .distance = 6 }));
+}
+
+test "enumerateLegalMatches handles overlapping DEFLATE copies" {
+    const raw = "aaaaaa";
+    const candidates = try enumerateLegalMatches(testing.allocator, raw, 1, 32 * 1024, 3, 258);
+    defer testing.allocator.free(candidates);
+
+    try testing.expectEqual(@as(usize, 3), candidates.len);
+    try testing.expectEqual(@as(u16, 5), candidates[0].length);
+    try testing.expectEqual(@as(u16, 1), candidates[0].distance);
+    try testing.expectEqual(@as(u16, 4), candidates[1].length);
+    try testing.expectEqual(@as(u16, 1), candidates[1].distance);
+    try testing.expectEqual(@as(u16, 3), candidates[2].length);
+    try testing.expectEqual(@as(u16, 1), candidates[2].distance);
+    try testing.expectEqual(@as(?usize, 2), findLegalMatchIndex(candidates, .{ .length = 3, .distance = 1 }));
 }
 
 test "observeFlushSchedule groups internal and final empty stored blocks" {

@@ -144,6 +144,8 @@
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
 - [ ] PNG IDAT miss follow-up: model exact row partial-flush semantics for row-sized fixed/dynamic blocks with empty fixed markers; remaining sampled row-like misses have raw block spans equal to PNG filtered scanline sizes (`ceil(width * channels * bit_depth / 8) + 1`). Real zlib L6/default `Z_PARTIAL_FLUSH` per scanline matches block topology but diverges on individual LZ77 choices, so this likely needs either a parser-variant knob or token-level correction.
+- [x] Add legal LZ77 match-candidate enumeration for token-divergence diagnostics; PNG row misses now report whether the target match is legal and its rank among alternatives (2026-05-26 EDT).
+- [ ] Extend candidate-rank diagnostics from all legal raw matches to zlib-style hash-chain-visible candidates, preserving row-flush history but bounding lookahead at each row.
 - [x] PNG IDAT miss follow-up: resolve the single dynamic 59x32 16-bit RGBA stream; exact real-zlib oracle is `windowBits=14`, level 7, memLevel 7, `Z_FILTERED`, now represented as a generic configured candidate. Private 25-PNG sample improved from 88.0% to 92.0% exact (23/25) (2026-05-26 EDT).
 - [ ] PDF FlateDecode coverage: distinguish DEFLATE reproduction from PDF object/container reconstruction, but test both enough to support blar integration
 - [ ] macOS/iWork coverage: determine whether Pages/Numbers/Keynote use ZIP, protobuf/snappy-like package internals, Apple/CoreFoundation DEFLATE, zlib, or mixed encoders across versions

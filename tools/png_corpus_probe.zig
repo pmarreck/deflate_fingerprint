@@ -127,10 +127,46 @@ fn printDecodedToken(token: dfp.inspect.DecodedToken) void {
     }
 }
 
+fn printMatchRank(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    raw_start: usize,
+    window_size: usize,
+    label: []const u8,
+    token: dfp.inspect.DecodedToken,
+) void {
+    const m = switch (token) {
+        .match => |match| match,
+        .literal => return,
+    };
+    const candidates = dfp.inspect.enumerateLegalMatches(allocator, raw, raw_start, window_size, 3, 258) catch |err| {
+        std.debug.print("        {s}-rank: failed({s})\n", .{ label, @errorName(err) });
+        return;
+    };
+    defer allocator.free(candidates);
+
+    const rank = dfp.inspect.findLegalMatchIndex(candidates, .{ .length = m.length, .distance = m.distance });
+    if (rank) |idx| {
+        std.debug.print(
+            "        {s}-rank: {d}/{d} best=len{d}/dist{d}\n",
+            .{ label, idx + 1, candidates.len, candidates[0].length, candidates[0].distance },
+        );
+    } else if (candidates.len == 0) {
+        std.debug.print("        {s}-rank: not-legal no-candidates\n", .{label});
+    } else {
+        std.debug.print(
+            "        {s}-rank: not-legal among {d} best=len{d}/dist{d}\n",
+            .{ label, candidates.len, candidates[0].length, candidates[0].distance },
+        );
+    }
+}
+
 fn reportFirstTokenDivergence(
     allocator: std.mem.Allocator,
+    raw: []const u8,
     candidate: []const u8,
     target: []const u8,
+    window_size: usize,
 ) void {
     const target_tokens = dfp.inspect.inspectTokens(allocator, target) catch |err| {
         std.debug.print("      token-divergence: target inspect failed({s})\n", .{@errorName(err)});
@@ -169,6 +205,8 @@ fn reportFirstTokenDivergence(
         );
         printDecodedToken(candidate_item.token);
         std.debug.print("\n", .{});
+        printMatchRank(allocator, raw, target_item.raw_start, window_size, "target", target_item.token);
+        printMatchRank(allocator, raw, candidate_item.raw_start, window_size, "zlib", candidate_item.token);
         return;
     }
 
@@ -482,7 +520,7 @@ fn printRowFlushDiagnostics(
         defer allocator.free(candidate);
         if (best.diff < candidate.len) printByteWindow("zlib  ", candidate, best.diff);
         printBlockSummary(allocator, candidate);
-        reportFirstTokenDivergence(allocator, candidate, target);
+        reportFirstTokenDivergence(allocator, raw, candidate, target, @as(usize, 1) << @intCast(window_bits));
     }
 }
 
