@@ -56,6 +56,7 @@
 - [x] Add first PNG IDAT probe: extract concatenated IDAT zlib stream, strip to raw RFC 1951 body, inflate to PNG-filtered bytes, run registry/config identification, and cover with generated PNG integration fixture (2026-05-26 EDT)
 - [x] Add sanitized PNG miss-feature aggregation for private corpus runs: classify missed IDAT streams by dynamic/fixed/stored block presence, 4096-token dynamic blocks, and empty marker blocks without reporting private filenames (2026-05-26 EDT)
 - [x] Add abstract target-derived block-token-count reproduction configs with explicit LZ77 parse mode and C FFI coverage; private sampled PNG exact coverage improved 76.0% -> 88.0% by closing the 4096-token dynamic cluster and one empty-fixed-finish cluster (2026-05-26 EDT)
+- [x] Add explicit per-block type choices and raw-end block plans (segmented and continuous-history) as generic config arrays; manual PNG exception inspection showed remaining row-like misses split exactly at PNG filtered scanline sizes but still need a more exact partial-flush/tokenization model (2026-05-26 EDT)
 - [ ] Extend PNG IDAT metadata capture: parse IHDR enough to expose row filter-byte offsets/counts, optionally validate chunk CRCs, and report IDAT chunk-size topology for upstream whole-file restoration tests
 - [ ] Add PDF FlateDecode probe: walk PDF object streams/streams with `/FlateDecode`, extract raw DEFLATE payloads, and preserve object-level metadata for byte-exact integration tests
 - [ ] Add iWork probe: inspect `.pages` / `.numbers` / `.key` package structure and extract embedded DEFLATE streams for the same fingerprint/config path
@@ -141,7 +142,8 @@
 - [ ] .NET DeflateStream version coverage strategy
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
-- [ ] PNG IDAT miss follow-up: investigate remaining sampled miss clusters as abstract configs: explicit block type selection for fixed/dynamic row-like block plans, plus the unresolved single dynamic small-window-looking stream.
+- [ ] PNG IDAT miss follow-up: model exact row partial-flush semantics for row-sized fixed/dynamic blocks with empty fixed markers; remaining sampled row-like misses have raw block spans equal to PNG filtered scanline sizes (`width * bytes_per_pixel + 1`).
+- [ ] PNG IDAT miss follow-up: investigate the unresolved single dynamic 59x32 16-bit RGBA stream; the whole stream is one dynamic block over 32 filtered scanlines and did not match current 16 KiB-window candidates.
 - [ ] PDF FlateDecode coverage: distinguish DEFLATE reproduction from PDF object/container reconstruction, but test both enough to support blar integration
 - [ ] macOS/iWork coverage: determine whether Pages/Numbers/Keynote use ZIP, protobuf/snappy-like package internals, Apple/CoreFoundation DEFLATE, zlib, or mixed encoders across versions
 - [ ] gzip header bytes as secondary attribution signal

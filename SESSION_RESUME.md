@@ -379,7 +379,7 @@ Current probe check:
     so private corpus runs can be summarized without exposing filenames.
   - `tests/integration/png_probe.sh` generates a deterministic public PNG-like
     fixture and verifies the probe identifies its zlib stream. Full suite:
-    170/170 green.
+    176/176 green.
 - Private sampled PNG checkpoint (25 local/NAS samples, filenames intentionally
   omitted): improved from 19/25 exact (76.0%) to 22/25 exact (88.0%) after
   adding generic target-derived block-token-count configs plus explicit LZ77
@@ -388,13 +388,19 @@ Current probe check:
   cluster.
 - Remaining sampled PNG misses: 3/25. All inspect cleanly and contain dynamic
   blocks; none still has the 4096-token dynamic cadence. Two have row-like
-  data blocks separated by empty fixed markers, suggesting the next abstract
-  dial is explicit block type selection per planned block. The third is a
-  single dynamic block with a smaller zlib window-looking header, but the
-  current 16 KiB-window candidates did not reproduce it.
+  data blocks separated by empty fixed markers. Manual inspection confirmed
+  the raw spans are exactly PNG filtered scanline sizes: one RGB image uses
+  2167-byte blocks (`722 * 3 + 1`), and another RGB image uses 667-byte blocks
+  (`222 * 3 + 1`). Generic raw-end block plans, continuous-history raw-end
+  plans, and explicit per-block type choices are implemented and tested, but
+  these two exceptions still miss, so the remaining gap is likely exact
+  partial-flush/tokenization semantics rather than just boundary storage.
+  The third miss is a 59x32 16-bit RGBA stream with one dynamic block over all
+  32 filtered scanlines; current 16 KiB-window candidates did not reproduce it.
 - New generic config dials exposed in Zig and C FFI: `parse_mode`, explicit
-  `block_token_counts`, and `empty_fixed_after_block_counts`. Core still does
-  not name PNG, Excel, Office, or other producers.
+  `block_token_counts`, `block_raw_end_offsets`, `block_modes`, and
+  `empty_fixed_after_block_counts`. Core still does not name PNG, Excel,
+  Office, or other producers.
 
 ## Recent commit log (most recent first)
 
@@ -413,6 +419,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 170/170 green.
+3. Run `./test` — should be 176/176 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

@@ -86,6 +86,13 @@ pub const LZ77ParseMode = enum {
     slow,
 };
 
+pub const BlockEncodingMode = enum(u8) {
+    auto,
+    stored,
+    fixed,
+    dynamic,
+};
+
 pub const FinishMode = enum {
     last_data_block,
     empty_fixed_block,
@@ -103,6 +110,8 @@ pub const DeflateReproductionConfig = struct {
     parse_mode: LZ77ParseMode = .fast,
     sync_flushes: []const FlushEvent = &.{},
     block_token_counts: []const usize = &.{},
+    block_raw_end_offsets: []const usize = &.{},
+    block_modes: []const BlockEncodingMode = &.{},
     empty_fixed_after_block_counts: []const usize = &.{},
     final_flush_empty_fixed_blocks_before: usize = 0,
     final_flush_empty_stored_blocks: usize = 0,
@@ -1398,8 +1407,12 @@ fn encodeExplicitBlockPlanDeflate(
     mem_level: u4,
     parse_mode: LZ77ParseMode,
     block_token_counts: []const usize,
+    block_modes: []const BlockEncodingMode,
     empty_fixed_after_block_counts: []const usize,
 ) ![]u8 {
+    if (block_modes.len != 0 and block_modes.len != block_token_counts.len) {
+        return error.InvalidBlockPlan;
+    }
     if (empty_fixed_after_block_counts.len != 0 and empty_fixed_after_block_counts.len != block_token_counts.len) {
         return error.InvalidBlockPlan;
     }
@@ -1425,12 +1438,18 @@ fn encodeExplicitBlockPlanDeflate(
     var raw_start: usize = 0;
     for (block_token_counts, 0..) |count, block_i| {
         const empty_fixed_after = if (empty_fixed_after_block_counts.len == 0) 0 else empty_fixed_after_block_counts[block_i];
+        const block_mode = if (block_modes.len == 0) .auto else block_modes[block_i];
         if (block_i + 1 == block_token_counts.len and empty_fixed_after != 0) return error.InvalidBlockPlan;
 
         const token_end = token_start + count;
         const raw_end = raw_start + tokenStreamRawLen(tokens[token_start..token_end]);
         const bfinal: u1 = if (block_i + 1 == block_token_counts.len and empty_fixed_after == 0) 1 else 0;
-        try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[token_start..token_end], raw[raw_start..raw_end], bfinal);
+        switch (block_mode) {
+            .auto => try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens[token_start..token_end], raw[raw_start..raw_end], bfinal),
+            .stored => try emitStoredBlock(&bw, raw[raw_start..raw_end], bfinal),
+            .fixed => try emitFixedHuffmanFromTokensBlock(&bw, tokens[token_start..token_end], bfinal),
+            .dynamic => try emitDynamicHuffmanFromTokensBlock(&bw, allocator, tokens[token_start..token_end], bfinal),
+        }
         try writeEmptyFixedBlocks(&bw, empty_fixed_after);
         token_start = token_end;
         raw_start = raw_end;
@@ -1438,6 +1457,74 @@ fn encodeExplicitBlockPlanDeflate(
 
     std.debug.assert(token_start == tokens.len);
     std.debug.assert(raw_start == raw.len);
+    return bw.toOwnedSlice();
+}
+
+/// Emit a DEFLATE stream using explicit cumulative raw-byte block ends. This
+/// models producers that split at semantic byte offsets, such as image rows,
+/// then parse each block segment independently.
+fn encodeExplicitRawBlockPlanDeflate(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    params: LZ77Params,
+    mem_level: u4,
+    parse_mode: LZ77ParseMode,
+    tokenization_mode: TokenizationMode,
+    block_raw_end_offsets: []const usize,
+    block_modes: []const BlockEncodingMode,
+    empty_fixed_after_block_counts: []const usize,
+) ![]u8 {
+    if (block_raw_end_offsets.len == 0) return error.InvalidBlockPlan;
+    if (block_modes.len != 0 and block_modes.len != block_raw_end_offsets.len) return error.InvalidBlockPlan;
+    if (empty_fixed_after_block_counts.len != 0 and empty_fixed_after_block_counts.len != block_raw_end_offsets.len) return error.InvalidBlockPlan;
+
+    const adjusted = withMemLevel(params, mem_level);
+    const all_tokens = switch (tokenization_mode) {
+        .segmented => &[_]Token{},
+        .prefix_history => switch (parse_mode) {
+            .fast => try lz77Tokenize(allocator, raw, adjusted),
+            .slow => try lz77TokenizeSlow(allocator, raw, adjusted),
+        },
+    };
+    defer if (tokenization_mode == .prefix_history) allocator.free(all_tokens);
+
+    var bw = BitWriter.init(allocator);
+    errdefer bw.deinit();
+
+    var raw_start: usize = 0;
+    var token_start: usize = 0;
+    for (block_raw_end_offsets, 0..) |raw_end, block_i| {
+        if (raw_end <= raw_start or raw_end > raw.len) return error.InvalidBlockPlan;
+        const empty_fixed_after = if (empty_fixed_after_block_counts.len == 0) 0 else empty_fixed_after_block_counts[block_i];
+        const block_mode = if (block_modes.len == 0) .auto else block_modes[block_i];
+        if (block_i + 1 == block_raw_end_offsets.len and empty_fixed_after != 0) return error.InvalidBlockPlan;
+
+        const segment = raw[raw_start..raw_end];
+        const tokens = switch (tokenization_mode) {
+            .segmented => switch (parse_mode) {
+                .fast => try lz77Tokenize(allocator, segment, adjusted),
+                .slow => try lz77TokenizeSlow(allocator, segment, adjusted),
+            },
+            .prefix_history => blk: {
+                const token_end = tokenIndexAtRawOffset(all_tokens, raw_end) orelse return error.FlushBoundaryInsideToken;
+                defer token_start = token_end;
+                break :blk all_tokens[token_start..token_end];
+            },
+        };
+        defer if (tokenization_mode == .segmented) allocator.free(tokens);
+
+        const bfinal: u1 = if (block_i + 1 == block_raw_end_offsets.len and empty_fixed_after == 0) 1 else 0;
+        switch (block_mode) {
+            .auto => try blocks.emitBlockFromTokensWithDynamicIntoRaw(&bw, allocator, tokens, segment, bfinal),
+            .stored => try emitStoredBlock(&bw, segment, bfinal),
+            .fixed => try emitFixedHuffmanFromTokensBlock(&bw, tokens, bfinal),
+            .dynamic => try emitDynamicHuffmanFromTokensBlock(&bw, allocator, tokens, bfinal),
+        }
+        try writeEmptyFixedBlocks(&bw, empty_fixed_after);
+        raw_start = raw_end;
+    }
+    if (raw_start != raw.len) return error.InvalidBlockPlan;
+
     return bw.toOwnedSlice();
 }
 
@@ -1453,7 +1540,21 @@ pub fn encodeConfiguredDeflate(
             if (config.sync_flushes.len != 0) return error.InvalidConfig;
             if (config.final_flush_empty_fixed_blocks_before != 0) return error.InvalidConfig;
             if (config.final_flush_empty_stored_blocks != 0) return error.InvalidConfig;
-            if (config.block_token_counts.len == 0) return error.InvalidConfig;
+            if (config.block_token_counts.len != 0 and config.block_raw_end_offsets.len != 0) return error.InvalidConfig;
+            if (config.block_token_counts.len == 0 and config.block_raw_end_offsets.len == 0) return error.InvalidConfig;
+            if (config.block_raw_end_offsets.len != 0) {
+                return encodeExplicitRawBlockPlanDeflate(
+                    allocator,
+                    raw,
+                    config.params,
+                    config.mem_level,
+                    config.parse_mode,
+                    config.tokenization_mode,
+                    config.block_raw_end_offsets,
+                    config.block_modes,
+                    config.empty_fixed_after_block_counts,
+                );
+            }
             return encodeExplicitBlockPlanDeflate(
                 allocator,
                 raw,
@@ -1461,6 +1562,7 @@ pub fn encodeConfiguredDeflate(
                 config.mem_level,
                 config.parse_mode,
                 config.block_token_counts,
+                config.block_modes,
                 config.empty_fixed_after_block_counts,
             );
         },
@@ -1569,6 +1671,80 @@ test "encodeConfiguredDeflate honors empty fixed markers between planned data bl
     try testing.expectEqual(false, inspected[1].bfinal);
     try testing.expectEqual(@as(usize, 2), inspected[2].token_count);
     try testing.expectEqual(true, inspected[2].bfinal);
+}
+
+test "encodeConfiguredDeflate honors explicit block type choices in planned data blocks" {
+    const raw = "ABCABCABCABC";
+    const block_token_counts = [_]usize{ 3, 2 };
+    const block_modes = [_]BlockEncodingMode{ .dynamic, .fixed };
+
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .block_token_counts = &block_token_counts,
+        .block_modes = &block_modes,
+        .finish_mode = .last_data_block,
+    });
+    defer testing.allocator.free(got);
+
+    const inspected = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(inspected);
+
+    try testing.expectEqual(@as(usize, 2), inspected.len);
+    try testing.expectEqual(inspect.BlockType.dynamic, inspected[0].block_type);
+    try testing.expectEqual(@as(usize, 3), inspected[0].token_count);
+    try testing.expectEqual(false, inspected[0].bfinal);
+    try testing.expectEqual(inspect.BlockType.fixed, inspected[1].block_type);
+    try testing.expectEqual(@as(usize, 2), inspected[1].token_count);
+    try testing.expectEqual(true, inspected[1].bfinal);
+}
+
+test "encodeConfiguredDeflate honors explicit raw-end block plans" {
+    const raw = "ABCABCABCABC";
+    const block_raw_end_offsets = [_]usize{ 3, raw.len };
+    const block_modes = [_]BlockEncodingMode{ .dynamic, .fixed };
+
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .block_raw_end_offsets = &block_raw_end_offsets,
+        .block_modes = &block_modes,
+        .finish_mode = .last_data_block,
+    });
+    defer testing.allocator.free(got);
+
+    const inspected = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(inspected);
+
+    try testing.expectEqual(@as(usize, 2), inspected.len);
+    try testing.expectEqual(inspect.BlockType.dynamic, inspected[0].block_type);
+    try testing.expectEqual(@as(usize, 0), inspected[0].raw_start);
+    try testing.expectEqual(@as(usize, 3), inspected[0].raw_end);
+    try testing.expectEqual(false, inspected[0].bfinal);
+    try testing.expectEqual(inspect.BlockType.fixed, inspected[1].block_type);
+    try testing.expectEqual(@as(usize, 3), inspected[1].raw_start);
+    try testing.expectEqual(raw.len, inspected[1].raw_end);
+    try testing.expectEqual(true, inspected[1].bfinal);
+}
+
+test "encodeConfiguredDeflate raw-end prefix history keeps cross-block matches" {
+    const raw = "ABCABCABCABC";
+    const block_raw_end_offsets = [_]usize{ 4, raw.len };
+
+    const got = try encodeConfiguredDeflate(testing.allocator, raw, .{
+        .params = LZ77_LEVEL_1,
+        .block_raw_end_offsets = &block_raw_end_offsets,
+        .finish_mode = .last_data_block,
+        .tokenization_mode = .prefix_history,
+    });
+    defer testing.allocator.free(got);
+
+    const inspected = try inspect.inspectBlocks(testing.allocator, got);
+    defer testing.allocator.free(inspected);
+
+    try testing.expectEqual(@as(usize, 2), inspected.len);
+    try testing.expectEqual(@as(usize, 4), inspected[0].raw_end);
+    try testing.expectEqual(@as(usize, 4), inspected[0].token_count);
+    try testing.expectEqual(raw.len, inspected[1].raw_end);
+    try testing.expectEqual(@as(usize, 1), inspected[1].token_count);
 }
 
 test "encodeConfiguredDeflate supports per-offset empty stored counts" {

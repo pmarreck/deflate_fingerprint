@@ -117,11 +117,14 @@ fn printBlockSummary(allocator: std.mem.Allocator, compressed: []const u8) void 
     };
     defer allocator.free(blocks);
 
-    std.debug.print("      blocks:", .{});
-    const limit = @min(blocks.len, 64);
-    for (blocks[0..limit]) |block| {
-        std.debug.print(" {s}:{d}", .{ @tagName(block.block_type), block.token_count });
-    }
+	std.debug.print("      blocks:", .{});
+	const limit = @min(blocks.len, 64);
+	for (blocks[0..limit]) |block| {
+		std.debug.print(
+			" {s}:{d}[{d}..{d}]",
+			.{ @tagName(block.block_type), block.token_count, block.raw_start, block.raw_end },
+		);
+	}
     if (blocks.len > limit) std.debug.print(" ...", .{});
     std.debug.print("\n", .{});
 }

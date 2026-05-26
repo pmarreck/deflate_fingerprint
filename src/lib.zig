@@ -81,9 +81,13 @@ pub const OwnedReproductionConfig = struct {
     pub fn deinit(self: *OwnedReproductionConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.config.sync_flushes);
         allocator.free(self.config.block_token_counts);
+        allocator.free(self.config.block_raw_end_offsets);
+        allocator.free(self.config.block_modes);
         allocator.free(self.config.empty_fixed_after_block_counts);
         self.config.sync_flushes = &.{};
         self.config.block_token_counts = &.{};
+        self.config.block_raw_end_offsets = &.{};
+        self.config.block_modes = &.{};
         self.config.empty_fixed_after_block_counts = &.{};
     }
 };
@@ -251,13 +255,26 @@ fn cloneObservedFlushEvents(
 
 const ObservedBlockPlan = struct {
     token_counts: []usize,
+    raw_end_offsets: []usize,
+    block_modes: []encoder.BlockEncodingMode,
     empty_fixed_after_counts: []usize,
 
     fn deinit(self: ObservedBlockPlan, allocator: std.mem.Allocator) void {
         allocator.free(self.token_counts);
+        allocator.free(self.raw_end_offsets);
+        allocator.free(self.block_modes);
         allocator.free(self.empty_fixed_after_counts);
     }
 };
+
+fn blockModeFromObserved(block_type: inspect.BlockType) ?encoder.BlockEncodingMode {
+    return switch (block_type) {
+        .stored => .stored,
+        .fixed => .fixed,
+        .dynamic => .dynamic,
+        .reserved => null,
+    };
+}
 
 fn cloneObservedDataBlockPlan(allocator: std.mem.Allocator, target: []const u8) !?ObservedBlockPlan {
     const infos = inspect.inspectBlocks(allocator, target) catch return null;
@@ -271,6 +288,10 @@ fn cloneObservedDataBlockPlan(allocator: std.mem.Allocator, target: []const u8) 
 
     const token_counts = try allocator.alloc(usize, count);
     errdefer allocator.free(token_counts);
+    const raw_end_offsets = try allocator.alloc(usize, count);
+    errdefer allocator.free(raw_end_offsets);
+    const block_modes = try allocator.alloc(encoder.BlockEncodingMode, count);
+    errdefer allocator.free(block_modes);
     const empty_fixed_after_counts = try allocator.alloc(usize, count);
     errdefer allocator.free(empty_fixed_after_counts);
 
@@ -280,6 +301,8 @@ fn cloneObservedDataBlockPlan(allocator: std.mem.Allocator, target: []const u8) 
         const block = infos[i];
         if (block.token_count == 0) continue;
         token_counts[out_i] = block.token_count;
+        raw_end_offsets[out_i] = block.raw_end;
+        block_modes[out_i] = blockModeFromObserved(block.block_type) orelse return null;
         var empty_fixed_after: usize = 0;
         var j = i + 1;
         while (j < infos.len and infos[j].token_count == 0 and infos[j].block_type == .fixed) : (j += 1) {
@@ -291,6 +314,8 @@ fn cloneObservedDataBlockPlan(allocator: std.mem.Allocator, target: []const u8) 
 
     return .{
         .token_counts = token_counts,
+        .raw_end_offsets = raw_end_offsets,
+        .block_modes = block_modes,
         .empty_fixed_after_counts = empty_fixed_after_counts,
     };
 }
@@ -380,25 +405,68 @@ pub fn fingerprintConfigured(
             block_plan.deinit(allocator);
             continue;
         }
-        const config: encoder.DeflateReproductionConfig = .{
+        const token_config: encoder.DeflateReproductionConfig = .{
             .params = candidate.params,
             .mem_level = candidate.mem_level,
             .parse_mode = candidate.parse_mode,
             .block_token_counts = block_plan.token_counts,
+            .block_modes = block_plan.block_modes,
             .empty_fixed_after_block_counts = block_plan.empty_fixed_after_counts,
             .finish_mode = .last_data_block,
             .tokenization_mode = .segmented,
         };
 
-        const encoded = encoder.encodeConfiguredDeflate(allocator, raw, config) catch |err| {
+        if (encoder.encodeConfiguredDeflate(allocator, raw, token_config)) |encoded| {
+            defer allocator.free(encoded);
+            if (std.mem.eql(u8, encoded, target)) {
+                allocator.free(block_plan.raw_end_offsets);
+                return .{ .config = token_config };
+            }
+        } else |err| {
+            if (err == error.OutOfMemory) {
+                block_plan.deinit(allocator);
+                return err;
+            }
+        }
+
+        const raw_config: encoder.DeflateReproductionConfig = .{
+            .params = candidate.params,
+            .mem_level = candidate.mem_level,
+            .parse_mode = candidate.parse_mode,
+            .block_raw_end_offsets = block_plan.raw_end_offsets,
+            .block_modes = block_plan.block_modes,
+            .empty_fixed_after_block_counts = block_plan.empty_fixed_after_counts,
+            .finish_mode = .last_data_block,
+            .tokenization_mode = .segmented,
+        };
+
+        const raw_encoded = encoder.encodeConfiguredDeflate(allocator, raw, raw_config) catch |err| {
             block_plan.deinit(allocator);
             if (err == error.OutOfMemory) return err;
             continue;
         };
-        defer allocator.free(encoded);
+        defer allocator.free(raw_encoded);
 
-        if (std.mem.eql(u8, encoded, target)) {
-            return .{ .config = config };
+        if (std.mem.eql(u8, raw_encoded, target)) {
+            allocator.free(block_plan.token_counts);
+            return .{ .config = raw_config };
+        }
+
+        var prefix_raw_config = raw_config;
+        prefix_raw_config.tokenization_mode = .prefix_history;
+        const prefix_raw_encoded = encoder.encodeConfiguredDeflate(allocator, raw, prefix_raw_config) catch |err| {
+            if (err == error.OutOfMemory) {
+                block_plan.deinit(allocator);
+                return err;
+            }
+            block_plan.deinit(allocator);
+            continue;
+        };
+        defer allocator.free(prefix_raw_encoded);
+
+        if (std.mem.eql(u8, prefix_raw_encoded, target)) {
+            allocator.free(block_plan.token_counts);
+            return .{ .config = prefix_raw_config };
         }
         block_plan.deinit(allocator);
     }
@@ -463,6 +531,10 @@ const CDeflateConfig = extern struct {
     final_flush_empty_stored_blocks: usize,
     block_token_counts: ?[*]const usize = null,
     block_token_counts_len: usize = 0,
+    block_raw_end_offsets: ?[*]const usize = null,
+    block_raw_end_offsets_len: usize = 0,
+    block_modes: ?[*]const encoder.BlockEncodingMode = null,
+    block_modes_len: usize = 0,
     empty_fixed_after_block_counts: ?[*]const usize = null,
     empty_fixed_after_block_counts_len: usize = 0,
 };
@@ -500,6 +572,18 @@ fn configFromC(c: *const CDeflateConfig) !encoder.DeflateReproductionConfig {
         ptr[0..c.block_token_counts_len]
     else
         return error.InvalidConfig;
+    const block_raw_end_offsets = if (c.block_raw_end_offsets_len == 0)
+        &[_]usize{}
+    else if (c.block_raw_end_offsets) |ptr|
+        ptr[0..c.block_raw_end_offsets_len]
+    else
+        return error.InvalidConfig;
+    const block_modes = if (c.block_modes_len == 0)
+        &[_]encoder.BlockEncodingMode{}
+    else if (c.block_modes) |ptr|
+        ptr[0..c.block_modes_len]
+    else
+        return error.InvalidConfig;
     const empty_fixed_after_block_counts = if (c.empty_fixed_after_block_counts_len == 0)
         &[_]usize{}
     else if (c.empty_fixed_after_block_counts) |ptr|
@@ -522,6 +606,8 @@ fn configFromC(c: *const CDeflateConfig) !encoder.DeflateReproductionConfig {
         .parse_mode = parse_mode,
         .sync_flushes = sync_flushes,
         .block_token_counts = block_token_counts,
+        .block_raw_end_offsets = block_raw_end_offsets,
+        .block_modes = block_modes,
         .empty_fixed_after_block_counts = empty_fixed_after_block_counts,
         .final_flush_empty_fixed_blocks_before = c.final_flush_empty_fixed_blocks_before,
         .final_flush_empty_stored_blocks = c.final_flush_empty_stored_blocks,
@@ -746,6 +832,50 @@ test "dfp_encode_configured: explicit block plan is exposed through C FFI" {
     try std.testing.expectEqual(true, blocks_seen[2].bfinal);
 }
 
+test "dfp_encode_configured: raw-end block plan and block modes are exposed through C FFI" {
+    const raw = "ABCABCABCABC";
+    const block_raw_end_offsets = [_]usize{ 4, raw.len };
+    const block_modes = [_]encoder.BlockEncodingMode{ .dynamic, .fixed };
+    const config: CDeflateConfig = .{
+        .max_chain_length = 4,
+        .good_match = 4,
+        .nice_match = 8,
+        .max_lazy_match = 4,
+        .max_match = 258,
+        .min_match = 3,
+        .mem_level = 8,
+        .final_flush_empty_fixed_blocks_before = 0,
+        .tokenization_mode = C_TOKENIZATION_PREFIX_HISTORY,
+        .finish_mode = C_FINISH_LAST_DATA_BLOCK,
+        .parse_mode = C_PARSE_FAST,
+        .filtered = 0,
+        .window_size = 32768,
+        .sync_flushes = null,
+        .sync_flushes_len = 0,
+        .final_flush_empty_stored_blocks = 0,
+        .block_raw_end_offsets = &block_raw_end_offsets,
+        .block_raw_end_offsets_len = block_raw_end_offsets.len,
+        .block_modes = &block_modes,
+        .block_modes_len = block_modes.len,
+    };
+
+    var out_buf: [*]u8 = undefined;
+    var out_len: usize = 0;
+    const rc = dfp_encode_configured(raw.ptr, raw.len, &config, &out_buf, &out_len);
+    try std.testing.expectEqual(@as(i32, 0), rc);
+    defer dfp_free(out_buf, out_len);
+
+    const blocks_seen = try inspect.inspectBlocks(std.testing.allocator, out_buf[0..out_len]);
+    defer std.testing.allocator.free(blocks_seen);
+
+    try std.testing.expectEqual(@as(usize, 2), blocks_seen.len);
+    try std.testing.expectEqual(inspect.BlockType.dynamic, blocks_seen[0].block_type);
+    try std.testing.expectEqual(@as(usize, 4), blocks_seen[0].raw_end);
+    try std.testing.expectEqual(inspect.BlockType.fixed, blocks_seen[1].block_type);
+    try std.testing.expectEqual(raw.len, blocks_seen[1].raw_end);
+    try std.testing.expectEqual(@as(usize, 1), blocks_seen[1].token_count);
+}
+
 test "fingerprintConfigured recovers observed flush topology and exact config reproduction" {
     const raw =
         "<worksheet><sheetData><row r=\"1\"><c>A</c></row>" ++
@@ -844,6 +974,57 @@ test "fingerprintConfigured recovers empty fixed markers between planned blocks"
     try std.testing.expectEqual(@as(usize, 2), result.config.empty_fixed_after_block_counts.len);
     try std.testing.expectEqual(@as(usize, 1), result.config.empty_fixed_after_block_counts[0]);
     try std.testing.expectEqual(@as(usize, 0), result.config.empty_fixed_after_block_counts[1]);
+
+    const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
+    defer std.testing.allocator.free(reproduced);
+    try std.testing.expectEqualSlices(u8, target, reproduced);
+}
+
+test "fingerprintConfigured recovers explicit data block type plan" {
+    const raw = "ABCABCABCABC";
+    const block_token_counts = [_]usize{ 3, 2 };
+    const block_modes = [_]encoder.BlockEncodingMode{ .dynamic, .fixed };
+    const target = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, .{
+        .params = encoder.LZ77_LEVEL_1,
+        .block_token_counts = &block_token_counts,
+        .block_modes = &block_modes,
+        .finish_mode = .last_data_block,
+    });
+    defer std.testing.allocator.free(target);
+
+    var result = (try fingerprintConfigured(std.testing.allocator, raw, target)) orelse return error.ExpectedConfigMatch;
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), result.config.block_modes.len);
+    try std.testing.expectEqual(encoder.BlockEncodingMode.dynamic, result.config.block_modes[0]);
+    try std.testing.expectEqual(encoder.BlockEncodingMode.fixed, result.config.block_modes[1]);
+
+    const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
+    defer std.testing.allocator.free(reproduced);
+    try std.testing.expectEqualSlices(u8, target, reproduced);
+}
+
+test "fingerprintConfigured recovers raw-end block plan for independently parsed segments" {
+    const raw = "ABCDEFABCDEF";
+    const block_raw_end_offsets = [_]usize{ 6, raw.len };
+    const block_modes = [_]encoder.BlockEncodingMode{ .fixed, .dynamic };
+    const target = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, .{
+        .params = encoder.LZ77_LEVEL_1,
+        .block_raw_end_offsets = &block_raw_end_offsets,
+        .block_modes = &block_modes,
+        .finish_mode = .last_data_block,
+    });
+    defer std.testing.allocator.free(target);
+
+    var result = (try fingerprintConfigured(std.testing.allocator, raw, target)) orelse return error.ExpectedConfigMatch;
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), result.config.block_token_counts.len);
+    try std.testing.expectEqual(@as(usize, 2), result.config.block_raw_end_offsets.len);
+    try std.testing.expectEqual(@as(usize, 6), result.config.block_raw_end_offsets[0]);
+    try std.testing.expectEqual(raw.len, result.config.block_raw_end_offsets[1]);
+    try std.testing.expectEqual(encoder.BlockEncodingMode.fixed, result.config.block_modes[0]);
+    try std.testing.expectEqual(encoder.BlockEncodingMode.dynamic, result.config.block_modes[1]);
 
     const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
     defer std.testing.allocator.free(reproduced);

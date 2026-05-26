@@ -19,7 +19,7 @@ Active reverse-engineering / implementation project.
   zlib L1 explicit `SYNC_FLUSH` + empty finish handling, and zlib L6
   memLevel 6/7/9 pending-buffer variants plus Info-ZIP-style 4096-symbol
   profitability flushes observed in ZIP-family streams.
-- `./test` currently passes 170 tests: Zig unit tests, CLI integration tests,
+- `./test` currently passes 176 tests: Zig unit tests, CLI integration tests,
   real-zlib fidelity checks, and the internal corpus hit-rate sweep.
 - Internal project-file corpus: 100% hit rate across 500 generated raw-DEFLATE
   streams.
@@ -31,11 +31,11 @@ Active reverse-engineering / implementation project.
 - Active research target: large ZIP-family XML streams with non-default flush
   topology. The core now models these as abstract `DeflateReproductionConfig`
   values with per-offset `FlushEvent` counts derived from the target stream,
-  parse mode, explicit block token-count plans, and empty fixed marker
-  sequences; `fingerprintConfigured` can recover a byte-exact generic config
-  for observed flush/finish and explicit block-plan streams, while named
-  producer details such as Excel worksheet structure live in probes/tests
-  rather than the main encoder.
+  parse mode, explicit block token-count plans, raw-end block plans, per-block
+  type choices, and empty fixed marker sequences; `fingerprintConfigured` can
+  recover a byte-exact generic config for observed flush/finish and explicit
+  block-plan streams, while named producer details such as Excel worksheet
+  structure live in probes/tests rather than the main encoder.
 - Planned corpus coverage explicitly includes broader Office/iWork documents,
   EPUB, PDF FlateDecode streams, PNG IDAT streams, gzip, and outputs generated
   by zlib, libdeflate, 7-Zip, miniz, Go, .NET, Java, and Apple/CoreFoundation.

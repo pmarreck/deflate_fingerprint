@@ -36,6 +36,11 @@ extern "C" {
 #define DFP_PARSE_FAST                   0
 #define DFP_PARSE_SLOW                   1
 
+#define DFP_BLOCK_AUTO                   0
+#define DFP_BLOCK_STORED                 1
+#define DFP_BLOCK_FIXED                  2
+#define DFP_BLOCK_DYNAMIC                3
+
 /* ── Identification result ────────────────────────────────────────────── */
 
 typedef struct {
@@ -73,6 +78,10 @@ typedef struct {
     size_t   final_flush_empty_stored_blocks;
     const size_t *block_token_counts;
     size_t   block_token_counts_len;
+    const size_t *block_raw_end_offsets;
+    size_t   block_raw_end_offsets_len;
+    const uint8_t *block_modes;  /* DFP_BLOCK_* */
+    size_t   block_modes_len;
     const size_t *empty_fixed_after_block_counts;
     size_t   empty_fixed_after_block_counts_len;
 } dfp_deflate_config_t;
