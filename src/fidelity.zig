@@ -50,6 +50,20 @@ pub fn compressWithZlibMemLevel(
     strategy: Strategy,
     mem_level: c_int,
 ) ![]u8 {
+    return compressWithZlibWindowMemLevel(allocator, raw, level, strategy, 15, mem_level);
+}
+
+/// Compress `raw` with real zlib using explicit raw-DEFLATE windowBits and
+/// memLevel. This catches PNG/PDF-style streams that advertise smaller LZ77
+/// windows in their zlib wrapper but still need RFC1951-only reproduction.
+pub fn compressWithZlibWindowMemLevel(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    level: c_int,
+    strategy: Strategy,
+    window_bits: c_int,
+    mem_level: c_int,
+) ![]u8 {
     // Test oracle capacity: zlib's tight default bound is not enough for
     // non-default memLevels, which can emit many more stored-block headers.
     const cap: usize = raw.len + (raw.len >> 5) + 4096;
@@ -61,7 +75,7 @@ pub fn compressWithZlibMemLevel(
         &s,
         level,
         c.Z_DEFLATED,
-        -15, // raw DEFLATE
+        -window_bits, // raw DEFLATE
         mem_level,
         @intFromEnum(strategy),
         c.zlibVersion(),

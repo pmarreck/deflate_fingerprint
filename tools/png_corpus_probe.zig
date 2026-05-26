@@ -70,6 +70,114 @@ const Stats = struct {
     }
 };
 
+const DiagnoseFlushMode = enum(c_int) {
+    partial = 1, // Z_PARTIAL_FLUSH
+    sync = 2,    // Z_SYNC_FLUSH
+    block = 5,   // Z_BLOCK
+
+    fn name(self: DiagnoseFlushMode) []const u8 {
+        return switch (self) {
+            .partial => "partial",
+            .sync => "sync",
+            .block => "block",
+        };
+    }
+};
+
+fn firstDiff(a: []const u8, b: []const u8) ?usize {
+    const n = @min(a.len, b.len);
+    for (0..n) |i| {
+        if (a[i] != b[i]) return i;
+    }
+    if (a.len != b.len) return n;
+    return null;
+}
+
+fn printByteWindow(label: []const u8, bytes: []const u8, center: usize) void {
+    const start = center -| 8;
+    const end = @min(bytes.len, center + 8);
+    std.debug.print("      {s}[{d}..{d}):", .{ label, start, end });
+    for (bytes[start..end]) |b| std.debug.print(" {x:0>2}", .{b});
+    std.debug.print("\n", .{});
+}
+
+fn sameDecodedToken(a: dfp.inspect.DecodedToken, b: dfp.inspect.DecodedToken) bool {
+    return switch (a) {
+        .literal => |a_byte| switch (b) {
+            .literal => |b_byte| a_byte == b_byte,
+            .match => false,
+        },
+        .match => |a_match| switch (b) {
+            .literal => false,
+            .match => |b_match| a_match.length == b_match.length and a_match.distance == b_match.distance,
+        },
+    };
+}
+
+fn printDecodedToken(token: dfp.inspect.DecodedToken) void {
+    switch (token) {
+        .literal => |byte| {
+            if (byte >= 0x20 and byte <= 0x7e) {
+                std.debug.print("lit('{c}'/{d})", .{ byte, byte });
+            } else {
+                std.debug.print("lit(0x{x:0>2})", .{byte});
+            }
+        },
+        .match => |m| std.debug.print("match(len={d},dist={d})", .{ m.length, m.distance }),
+    }
+}
+
+fn reportFirstTokenDivergence(
+    allocator: std.mem.Allocator,
+    candidate: []const u8,
+    target: []const u8,
+) void {
+    const target_tokens = dfp.inspect.inspectTokens(allocator, target) catch |err| {
+        std.debug.print("      token-divergence: target inspect failed({s})\n", .{@errorName(err)});
+        return;
+    };
+    defer allocator.free(target_tokens);
+    const candidate_tokens = dfp.inspect.inspectTokens(allocator, candidate) catch |err| {
+        std.debug.print("      token-divergence: candidate inspect failed({s})\n", .{@errorName(err)});
+        return;
+    };
+    defer allocator.free(candidate_tokens);
+
+    const n = @min(target_tokens.len, candidate_tokens.len);
+    for (0..n) |i| {
+        const target_item = target_tokens[i];
+        const candidate_item = candidate_tokens[i];
+        if (target_item.block_index == candidate_item.block_index and
+            target_item.block_type == candidate_item.block_type and
+            target_item.raw_start == candidate_item.raw_start and
+            target_item.raw_end == candidate_item.raw_end and
+            sameDecodedToken(target_item.token, candidate_item.token))
+        {
+            continue;
+        }
+
+        std.debug.print("      token-divergence: index={d}\n", .{i});
+        std.debug.print(
+            "        target block={d}/{s} raw={d}-{d} ",
+            .{ target_item.block_index, @tagName(target_item.block_type), target_item.raw_start, target_item.raw_end },
+        );
+        printDecodedToken(target_item.token);
+        std.debug.print("\n", .{});
+        std.debug.print(
+            "        zlib   block={d}/{s} raw={d}-{d} ",
+            .{ candidate_item.block_index, @tagName(candidate_item.block_type), candidate_item.raw_start, candidate_item.raw_end },
+        );
+        printDecodedToken(candidate_item.token);
+        std.debug.print("\n", .{});
+        return;
+    }
+
+    std.debug.print(
+        "      token-divergence: common_prefix={d} target_tokens={d} zlib_tokens={d}\n",
+        .{ n, target_tokens.len, candidate_tokens.len },
+    );
+}
+
 /// Inflate one PNG IDAT zlib stream to PNG-filtered bytes. The probe only needs
 /// the exact bytes that were fed into DEFLATE; PNG filter reversal is upstream.
 fn inflateZlib(allocator: std.mem.Allocator, compressed: []const u8) ![]u8 {
@@ -107,6 +215,274 @@ fn inflateZlib(allocator: std.mem.Allocator, compressed: []const u8) ![]u8 {
         }
         if (rc == c.Z_BUF_ERROR) continue;
         return error.InflateFailed;
+    }
+}
+
+fn deflateRowsWithZlib(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    row_size: usize,
+    level: c_int,
+    strategy: c_int,
+    mem_level: c_int,
+    flush_mode: DiagnoseFlushMode,
+) ![]u8 {
+    if (row_size == 0) return error.InvalidRowSize;
+
+    var cap: usize = raw.len + (raw.len >> 4) + ((raw.len / row_size) + 2) * 32 + 4096;
+    var out = try allocator.alloc(u8, cap);
+    errdefer allocator.free(out);
+
+    var s: c.z_stream = std.mem.zeroes(c.z_stream);
+    const rc_init = c.deflateInit2_(
+        &s,
+        level,
+        c.Z_DEFLATED,
+        -15,
+        mem_level,
+        strategy,
+        c.zlibVersion(),
+        @sizeOf(c.z_stream),
+    );
+    if (rc_init != c.Z_OK) return error.DeflateInitFailed;
+    defer _ = c.deflateEnd(&s);
+
+    var used: usize = 0;
+    var off: usize = 0;
+    while (off < raw.len) {
+        const end = @min(raw.len, off + row_size);
+        s.next_in = @constCast(raw.ptr + off);
+        s.avail_in = @intCast(end - off);
+        while (true) {
+            if (used == out.len) {
+                cap *= 2;
+                out = try allocator.realloc(out, cap);
+            }
+            s.next_out = out.ptr + used;
+            s.avail_out = @intCast(out.len - used);
+            const rc = c.deflate(&s, @intFromEnum(flush_mode));
+            used = out.len - @as(usize, s.avail_out);
+            if (rc != c.Z_OK and rc != c.Z_BUF_ERROR) return error.DeflateFailed;
+            if (s.avail_in == 0) break;
+        }
+        off = end;
+    }
+
+    s.next_in = @constCast(raw.ptr + raw.len);
+    s.avail_in = 0;
+    while (true) {
+        if (used == out.len) {
+            cap *= 2;
+            out = try allocator.realloc(out, cap);
+        }
+        s.next_out = out.ptr + used;
+        s.avail_out = @intCast(out.len - used);
+        const rc = c.deflate(&s, c.Z_FINISH);
+        used = out.len - @as(usize, s.avail_out);
+        if (rc == c.Z_STREAM_END) return allocator.realloc(out, used);
+        if (rc != c.Z_OK and rc != c.Z_BUF_ERROR) return error.DeflateFailed;
+    }
+}
+
+fn deflateOnceWithZlib(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    level: c_int,
+    strategy: c_int,
+    mem_level: c_int,
+    window_bits: c_int,
+) ![]u8 {
+    var cap: usize = raw.len + (raw.len >> 4) + 4096;
+    var out = try allocator.alloc(u8, cap);
+    errdefer allocator.free(out);
+
+    var s: c.z_stream = std.mem.zeroes(c.z_stream);
+    const rc_init = c.deflateInit2_(
+        &s,
+        level,
+        c.Z_DEFLATED,
+        -window_bits,
+        mem_level,
+        strategy,
+        c.zlibVersion(),
+        @sizeOf(c.z_stream),
+    );
+    if (rc_init != c.Z_OK) return error.DeflateInitFailed;
+    defer _ = c.deflateEnd(&s);
+
+    s.next_in = @constCast(raw.ptr);
+    s.avail_in = @intCast(raw.len);
+    var used: usize = 0;
+    while (true) {
+        if (used == out.len) {
+            cap *= 2;
+            out = try allocator.realloc(out, cap);
+        }
+        s.next_out = out.ptr + used;
+        s.avail_out = @intCast(out.len - used);
+        const rc = c.deflate(&s, c.Z_FINISH);
+        used = out.len - @as(usize, s.avail_out);
+        if (rc == c.Z_STREAM_END) return allocator.realloc(out, used);
+        if (rc != c.Z_OK and rc != c.Z_BUF_ERROR) return error.DeflateFailed;
+    }
+}
+
+fn printOneShotDiagnostics(
+    allocator: std.mem.Allocator,
+    raw: []const u8,
+    target: []const u8,
+    window_bits: c_int,
+) void {
+    const levels = [_]c_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    const mem_levels = [_]c_int{ 5, 6, 7, 8, 9 };
+    const strategies = [_]struct { name: []const u8, value: c_int }{
+        .{ .name = "default", .value = c.Z_DEFAULT_STRATEGY },
+        .{ .name = "filtered", .value = c.Z_FILTERED },
+        .{ .name = "fixed", .value = c.Z_FIXED },
+    };
+    var best: ?struct {
+        level: c_int,
+        mem_level: c_int,
+        strategy: []const u8,
+        len: usize,
+        diff: usize,
+    } = null;
+    for (levels) |level| {
+        for (mem_levels) |mem_level| {
+            for (strategies) |strategy| {
+                const candidate = deflateOnceWithZlib(allocator, raw, level, strategy.value, mem_level, window_bits) catch continue;
+                defer allocator.free(candidate);
+                const diff = firstDiff(candidate, target);
+                if (diff == null) {
+                    std.debug.print(
+                        "      oneshot-zlib EXACT window={d} L{d} mem{d} {s} len={d}\n",
+                        .{ window_bits, level, mem_level, strategy.name, candidate.len },
+                    );
+                    return;
+                }
+                if (best == null or diff.? > best.?.diff) {
+                    best = .{ .level = level, .mem_level = mem_level, .strategy = strategy.name, .len = candidate.len, .diff = diff.? };
+                }
+            }
+        }
+    }
+    if (best) |b| {
+        std.debug.print(
+            "      oneshot-zlib best-prefix window={d} L{d} mem{d} {s}: len={d} first_diff={d} target_len={d}\n",
+            .{ window_bits, b.level, b.mem_level, b.strategy, b.len, b.diff, target.len },
+        );
+    }
+}
+
+fn printRowFlushDiagnostics(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    raw: []const u8,
+    target: []const u8,
+    window_bits: c_int,
+) void {
+    printOneShotDiagnostics(allocator, raw, target, window_bits);
+
+    const meta = dfp.png.parseIhdrMetadata(bytes) catch |err| {
+        std.debug.print("      row-diagnose: ihdr-failed({s})\n", .{@errorName(err)});
+        return;
+    };
+    const row_size = meta.filteredRowSize() catch |err| {
+        std.debug.print("      row-diagnose: row-size-failed({s})\n", .{@errorName(err)});
+        return;
+    };
+    const expected_raw_len = row_size * @as(usize, meta.height);
+    std.debug.print(
+        "      ihdr: {d}x{d} depth={d} color={d} interlace={d} row={d} rows-fit={any}\n",
+        .{ meta.width, meta.height, meta.bit_depth, meta.color_type, meta.interlace_method, row_size, expected_raw_len == raw.len },
+    );
+    if (expected_raw_len != raw.len or meta.interlace_method != 0) return;
+
+    const levels = [_]c_int{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    const mem_levels = [_]c_int{ 5, 6, 7, 8, 9 };
+    const strategies = [_]struct { name: []const u8, value: c_int }{
+        .{ .name = "default", .value = c.Z_DEFAULT_STRATEGY },
+        .{ .name = "filtered", .value = c.Z_FILTERED },
+        .{ .name = "fixed", .value = c.Z_FIXED },
+    };
+    const flushes = [_]DiagnoseFlushMode{ .partial, .sync, .block };
+
+    var best_desc: ?struct {
+        level: c_int,
+        mem_level: c_int,
+        strategy: []const u8,
+        strategy_value: c_int,
+        flush: DiagnoseFlushMode,
+        len: usize,
+        diff: usize,
+    } = null;
+
+    for (levels) |level| {
+        for (mem_levels) |mem_level| {
+            for (strategies) |strategy| {
+                for (flushes) |flush| {
+                    const candidate = deflateRowsWithZlib(
+                        allocator,
+                        raw,
+                        row_size,
+                        level,
+                        strategy.value,
+                        mem_level,
+                        flush,
+                    ) catch |err| {
+                        std.debug.print(
+                            "      row-zlib L{d} mem{d} {s} {s}: failed({s})\n",
+                            .{ level, mem_level, strategy.name, flush.name(), @errorName(err) },
+                        );
+                        continue;
+                    };
+                    defer allocator.free(candidate);
+
+                    const diff = firstDiff(candidate, target);
+                    if (diff == null) {
+                        std.debug.print(
+                            "      row-zlib EXACT L{d} mem{d} {s} {s} len={d}\n",
+                            .{ level, mem_level, strategy.name, flush.name(), candidate.len },
+                        );
+                        printBlockSummary(allocator, candidate);
+                        return;
+                    }
+                    const d = diff.?;
+                    if (best_desc == null or d > best_desc.?.diff) {
+                        best_desc = .{
+                            .level = level,
+                            .mem_level = mem_level,
+                            .strategy = strategy.name,
+                            .strategy_value = strategy.value,
+                            .flush = flush,
+                            .len = candidate.len,
+                            .diff = d,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    if (best_desc) |best| {
+        std.debug.print(
+            "      row-zlib best-prefix L{d} mem{d} {s} {s}: len={d} first_diff={d} target_len={d}\n",
+            .{ best.level, best.mem_level, best.strategy, best.flush.name(), best.len, best.diff, target.len },
+        );
+        if (best.diff < target.len) printByteWindow("target", target, best.diff);
+        const candidate = deflateRowsWithZlib(
+            allocator,
+            raw,
+            row_size,
+            best.level,
+            best.strategy_value,
+            best.mem_level,
+            best.flush,
+        ) catch return;
+        defer allocator.free(candidate);
+        if (best.diff < candidate.len) printByteWindow("zlib  ", candidate, best.diff);
+        printBlockSummary(allocator, candidate);
+        reportFirstTokenDivergence(allocator, candidate, target);
     }
 }
 
@@ -155,6 +531,7 @@ fn processPng(
     bytes: []const u8,
     stats: *Stats,
     verbose: bool,
+    diagnose_row_flush: bool,
 ) !void {
     var idat = try dfp.png.parseIdatStream(allocator, bytes);
     defer idat.deinit(allocator);
@@ -195,12 +572,17 @@ fn processPng(
     if (verbose) {
         std.debug.print("  MISS {s}: raw={d} deflate={d} zlib={x:0>2}{x:0>2}\n", .{ path, raw.len, target.len, idat.cmf, idat.flg });
         printBlockSummary(allocator, target);
+        if (diagnose_row_flush) {
+            const window_bits: c_int = @intCast((idat.cmf >> 4) + 8);
+            printRowFlushDiagnostics(allocator, bytes, raw, target, window_bits);
+        }
     }
 }
 
 const Args = struct {
     dir: []u8,
     verbose: bool,
+    diagnose_row_flush: bool,
     limit: ?usize,
 };
 
@@ -211,10 +593,14 @@ fn parseArgs(allocator: std.mem.Allocator, args: std.process.Args) !Args {
 
     var dir: ?[]u8 = null;
     var verbose = false;
+    var diagnose_row_flush = false;
     var limit: ?usize = null;
 
     while (it.next()) |a| {
         if (std.mem.eql(u8, a, "--verbose") or std.mem.eql(u8, a, "-v")) {
+            verbose = true;
+        } else if (std.mem.eql(u8, a, "--diagnose-row-flush")) {
+            diagnose_row_flush = true;
             verbose = true;
         } else if (std.mem.startsWith(u8, a, "--limit=")) {
             limit = try std.fmt.parseInt(usize, a["--limit=".len..], 10);
@@ -225,7 +611,7 @@ fn parseArgs(allocator: std.mem.Allocator, args: std.process.Args) !Args {
             std.debug.print(
                 \\png-corpus-probe: identify raw-DEFLATE streams inside PNG IDAT data.
                 \\
-                \\Usage: png-corpus-probe <dir> [--verbose] [--limit N]
+                \\Usage: png-corpus-probe <dir> [--verbose] [--diagnose-row-flush] [--limit N]
                 \\
             , .{});
             std.process.exit(0);
@@ -238,11 +624,11 @@ fn parseArgs(allocator: std.mem.Allocator, args: std.process.Args) !Args {
     }
 
     if (dir == null) {
-        std.debug.print("usage: png-corpus-probe <dir> [--verbose] [--limit N]\n", .{});
+        std.debug.print("usage: png-corpus-probe <dir> [--verbose] [--diagnose-row-flush] [--limit N]\n", .{});
         std.process.exit(2);
     }
 
-    return .{ .dir = dir.?, .verbose = verbose, .limit = limit };
+    return .{ .dir = dir.?, .verbose = verbose, .diagnose_row_flush = diagnose_row_flush, .limit = limit };
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -293,7 +679,7 @@ pub fn main(init: std.process.Init) !void {
         stats.files_scanned += 1;
         if (args.verbose) std.debug.print("[{d}] {s} ({d}B)\n", .{ stats.files_scanned, path_dup, size });
 
-        processPng(allocator, path_dup, bytes, &stats, args.verbose) catch |err| {
+        processPng(allocator, path_dup, bytes, &stats, args.verbose, args.diagnose_row_flush) catch |err| {
             stats.files_failed_parse += 1;
             if (args.verbose) std.debug.print("  parse error in {s}: {s}\n", .{ path_dup, @errorName(err) });
         };

@@ -24,13 +24,13 @@ annotate=[
 	src/lib.zig = Public Zig API/FFI and registry; includes configured fingerprint inference for observed flush schedules, token/raw block plans, block modes, and parse modes.
 	src/match.zig = LZ77 tokenizers and zlib-style params; memLevel adjustment caps hash_bits at 15 while pending buffer size varies separately.
 	src/ooxml.zig = OOXML docProps/app.xml metadata parser for producer/version clustering.
-	src/png.zig = PNG IDAT parser: concatenates chunks, validates zlib header, exposes raw RFC1951 body and wrapper metadata.
+	src/png.zig = PNG adapter parser: IDAT zlib stream extraction plus IHDR metadata/filtered-row sizing for corpus diagnostics.
 	tests/integration/fixtures/extract_zip_deflate.c = Tiny ZIP32 test helper that extracts the first method=8 raw DEFLATE payload from generator-oracle ZIP archives.
 	tests/integration/fixtures/gen_png_idat.c = Fixture generator: emits tiny PNG-like file with deterministic zlib-wrapped IDAT stream.
 	tests/integration/infozip_roundtrip.sh = Integration test: generates Info-ZIP zip -6 fixtures and asserts raw method=8 streams identify as fingerprint #32.
 	tests/integration/png_probe.sh = Integration test: generated PNG-like fixture exercises png-corpus-probe against IDAT zlib data.
 	tools/deflate_block_inspect.zig = Dev tool: prints raw-DEFLATE block boundaries using src/inspect.zig.
 	tools/excel_candidate_probe.zig = Dev probe: compares Excel worksheet DEFLATE hypotheses, sweeps fast params, reports token divergence, and tests row-chunk flush topology.
-	tools/png_corpus_probe.zig = PNG corpus probe: extracts IDAT raw DEFLATE, inflates PNG-filtered bytes, runs fingerprint/config identification, and summarizes sanitized miss block features.
+	tools/png_corpus_probe.zig = PNG corpus probe: IDAT raw-DEFLATE identification, sanitized miss features, and zlib row/one-shot diagnostics for exception triage.
 	tools/zip_corpus_probe.zig = ZIP-family corpus probe: extracts method=8 streams, reports fingerprints, OOXML metadata, miss block shapes, and optional Excel worksheet cluster coverage.
 ]

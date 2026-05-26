@@ -386,17 +386,22 @@ Current probe check:
   parse mode (`fast` vs `slow`). The three newly configured exact streams
   include the 4096-token dynamic cadence cluster and one empty-fixed-finish
   cluster.
-- Remaining sampled PNG misses: 3/25. All inspect cleanly and contain dynamic
-  blocks; none still has the 4096-token dynamic cadence. Two have row-like
+- Latest sampled PNG checkpoint: 23/25 exact (92.0%). The former single-dynamic
+  59x32 16-bit RGBA miss is byte-exactly reproduced by real zlib with
+  `windowBits=14`, level 7, memLevel 7, `Z_FILTERED`; this is now represented
+  as a generic configured candidate and tested with a zlib oracle.
+- Remaining sampled PNG misses: 2/25. Both inspect cleanly and have row-like
   data blocks separated by empty fixed markers. Manual inspection confirmed
-  the raw spans are exactly PNG filtered scanline sizes: one RGB image uses
-  2167-byte blocks (`722 * 3 + 1`), and another RGB image uses 667-byte blocks
-  (`222 * 3 + 1`). Generic raw-end block plans, continuous-history raw-end
-  plans, and explicit per-block type choices are implemented and tested, but
-  these two exceptions still miss, so the remaining gap is likely exact
-  partial-flush/tokenization semantics rather than just boundary storage.
-  The third miss is a 59x32 16-bit RGBA stream with one dynamic block over all
-  32 filtered scanlines; current 16 KiB-window candidates did not reproduce it.
+  raw spans exactly equal PNG filtered scanline sizes: one RGB image uses
+  2167-byte rows (`ceil(722 * 3 * 8 / 8) + 1`), and another RGB image uses
+  667-byte rows (`ceil(222 * 3 * 8 / 8) + 1`). Real zlib L6/default
+  `Z_PARTIAL_FLUSH` per scanline reproduces the block topology almost exactly,
+  but not byte-exactly: the first decoded-token divergences are
+  `match(len=3,dist=1368)` vs `match(len=4,dist=1074)` in one stream and
+  `dist=667` vs `dist=666` in the other. Generic raw-end block plans,
+  continuous-history raw-end plans, and explicit per-block type choices are
+  implemented and tested, but these two exceptions now look like parser-variant
+  or token-level-correction work rather than boundary storage.
 - New generic config dials exposed in Zig and C FFI: `parse_mode`, explicit
   `block_token_counts`, `block_raw_end_offsets`, `block_modes`, and
   `empty_fixed_after_block_counts`. Core still does not name PNG, Excel,
@@ -419,6 +424,6 @@ zzvvlnuv encoder/docs: fix zlib max distance and refresh status
 1. Read this file (`SESSION_RESUME.md`) first.
 2. `jj status` — current uncommitted work, if any, should be limited to the
    active probe/fix being worked.
-3. Run `./test` — should be 176/176 green.
+3. Run `./test` — should be 179/179 green.
 4. Continue with abstract stream-divergence analysis; named producer details
    should remain in probes/tests unless Peter explicitly approves otherwise.

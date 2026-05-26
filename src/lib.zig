@@ -346,6 +346,7 @@ const OBSERVED_CONFIG_CANDIDATES = [_]ObservedConfigCandidate{
     .{ .params = withWindow(encoder.LZ77_LEVEL_6, 16 * 1024), .mem_level = 8, .parse_mode = .slow },
     .{ .params = withWindow(encoder.LZ77_LEVEL_9, 16 * 1024), .mem_level = 8, .parse_mode = .slow },
     .{ .params = withWindow(encoder.LZ77_LEVEL_6_FILTERED, 16 * 1024), .mem_level = 8, .parse_mode = .slow },
+    .{ .params = withWindow(encoder.LZ77_LEVEL_7_FILTERED, 16 * 1024), .mem_level = 7, .parse_mode = .slow },
     .{ .params = withWindow(encoder.LZ77_LEVEL_9_FILTERED, 16 * 1024), .mem_level = 8, .parse_mode = .slow },
     .{ .params = fastObservedParams(35), .mem_level = 7, .parse_mode = .fast },
     .{ .params = fastObservedParams(48), .mem_level = 7, .parse_mode = .fast },
@@ -1087,6 +1088,32 @@ test "fingerprintConfigured recovers single-block small-window streams" {
 
     try std.testing.expectEqual(@as(usize, 16 * 1024), result.config.params.window_size);
     try std.testing.expectEqual(encoder.FinishMode.last_data_block, result.config.finish_mode);
+    const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
+    defer std.testing.allocator.free(reproduced);
+    try std.testing.expectEqualSlices(u8, target, reproduced);
+}
+
+test "fingerprintConfigured recovers small-window filtered memLevel variants" {
+    const prefix = "\xf0" ** 300;
+    const filler_len = 20 * 1024;
+    const raw_len = prefix.len + filler_len + prefix.len;
+    const raw = try std.testing.allocator.alloc(u8, raw_len);
+    defer std.testing.allocator.free(raw);
+
+    @memcpy(raw[0..prefix.len], prefix);
+    @memset(raw[prefix.len..][0..filler_len], 0);
+    @memcpy(raw[prefix.len + filler_len ..][0..prefix.len], prefix);
+
+    const target = try fidelity.compressWithZlibWindowMemLevel(std.testing.allocator, raw, 7, .filtered, 14, 7);
+    defer std.testing.allocator.free(target);
+    const wider = try fidelity.compressWithZlibWindowMemLevel(std.testing.allocator, raw, 7, .filtered, 15, 7);
+    defer std.testing.allocator.free(wider);
+    try std.testing.expect(!std.mem.eql(u8, target, wider));
+
+    var result = (try fingerprintConfigured(std.testing.allocator, raw, target)) orelse return error.ExpectedConfigMatch;
+    defer result.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 16 * 1024), result.config.params.window_size);
     const reproduced = try encoder.encodeConfiguredDeflate(std.testing.allocator, raw, result.config);
     defer std.testing.allocator.free(reproduced);
     try std.testing.expectEqualSlices(u8, target, reproduced);

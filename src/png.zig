@@ -31,12 +31,67 @@ fn isChunkType(actual: []const u8, comptime expected: *const [4]u8) bool {
     return std.mem.eql(u8, actual, expected);
 }
 
+pub const PngMetadata = struct {
+    width: u32,
+    height: u32,
+    bit_depth: u8,
+    color_type: u8,
+    compression_method: u8,
+    filter_method: u8,
+    interlace_method: u8,
+
+    fn channelCount(self: PngMetadata) !usize {
+        return switch (self.color_type) {
+            0 => 1, // grayscale
+            2 => 3, // truecolor
+            3 => 1, // indexed color
+            4 => 2, // grayscale + alpha
+            6 => 4, // truecolor + alpha
+            else => error.UnsupportedPngColorType,
+        };
+    }
+
+    /// Return one PNG filtered scanline length. PNG stores a leading filter
+    /// byte before each packed row, so low-bit-depth rows need ceil(bit/8).
+    pub fn filteredRowSize(self: PngMetadata) !usize {
+        const channels = try self.channelCount();
+        const bits: usize = @as(usize, self.width) * channels * @as(usize, self.bit_depth);
+        return 1 + ((bits + 7) / 8);
+    }
+};
+
 /// Classify PNG filenames for corpus extraction. This is adapter discovery
 /// only; the DEFLATE core remains raw RFC1951-focused.
 pub fn isPngFilename(name: []const u8) bool {
     if (std.mem.startsWith(u8, name, "._")) return false;
     if (name.len < 4) return false;
     return std.ascii.eqlIgnoreCase(name[name.len - 4 ..], ".png");
+}
+
+/// Parse only IHDR image metadata needed by corpus probes. CRC validation and
+/// full container validation stay adapter-side; the DEFLATE core consumes only
+/// raw RFC1951 bytes.
+pub fn parseIhdrMetadata(png: []const u8) !PngMetadata {
+    if (png.len < PNG_SIGNATURE.len or !std.mem.eql(u8, png[0..PNG_SIGNATURE.len], &PNG_SIGNATURE)) {
+        return error.BadPngSignature;
+    }
+    if (png.len - PNG_SIGNATURE.len < 25) return error.TruncatedChunk;
+    const off = PNG_SIGNATURE.len;
+    const chunk_len = readU32BE(png, off);
+    if (chunk_len != 13) return error.MissingIhdr;
+    if (!isChunkType(png[off + 4 .. off + 8], "IHDR")) return error.MissingIhdr;
+    if (chunk_len > png.len - off - 12) return error.ChunkLengthOutOfRange;
+
+    const data = png[off + 8 .. off + 21];
+    return .{
+        .width = readU32BE(data, 0),
+        .height = readU32BE(data, 4),
+        .bit_depth = data[8],
+        .color_type = data[9],
+        .compression_method = data[10],
+        .filter_method = data[11],
+        .interlace_method = data[12],
+    };
 }
 
 /// Extract concatenated PNG IDAT data and expose its RFC 1951 body.
@@ -166,4 +221,38 @@ test "parseIdatStream rejects invalid zlib header checksum" {
     };
 
     try std.testing.expectError(error.BadZlibHeaderCheck, parseIdatStream(std.testing.allocator, &png));
+}
+
+test "parseIhdrMetadata exposes PNG filtered row size for truecolor data" {
+    const png = [_]u8{
+        0x89, 'P',  'N',  'G',  0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 'I',  'H',  'D',  'R',
+        0x00, 0x00, 0x02, 0xd2, 0x00, 0x00, 0x01, 0x0d,
+        0x08, 0x02, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 'I',  'E',  'N',  'D',
+        0x00, 0x00, 0x00, 0x00,
+    };
+
+    const meta = try parseIhdrMetadata(&png);
+    try std.testing.expectEqual(@as(u32, 722), meta.width);
+    try std.testing.expectEqual(@as(u32, 269), meta.height);
+    try std.testing.expectEqual(@as(u8, 8), meta.bit_depth);
+    try std.testing.expectEqual(@as(u8, 2), meta.color_type);
+    try std.testing.expectEqual(@as(usize, 2167), meta.filteredRowSize());
+}
+
+test "parseIhdrMetadata computes packed indexed row sizes with filter byte" {
+    const png = [_]u8{
+        0x89, 'P',  'N',  'G',  0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 'I',  'H',  'D',  'R',
+        0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00, 0x02,
+        0x01, 0x03, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 'I',  'E',  'N',  'D',
+        0x00, 0x00, 0x00, 0x00,
+    };
+
+    const meta = try parseIhdrMetadata(&png);
+    try std.testing.expectEqual(@as(usize, 3), meta.filteredRowSize());
 }
