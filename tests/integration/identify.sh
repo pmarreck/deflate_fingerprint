@@ -20,7 +20,7 @@ fi
 # Per-PID tempdir under $TMPDIR (RAM on macOS) so parallel test runs don't collide.
 WORK="${TMPDIR:-/tmp}/dfp_identify_test.$$"
 mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+trap 'command rm -rf "$WORK" 2>/dev/null' EXIT
 
 PASS=0
 FAIL=0

@@ -12,7 +12,7 @@ EXTRACT_SRC="$SCRIPT_DIR/fixtures/extract_zip_deflate.c"
 
 WORK="${TMPDIR:-/tmp}/dfp_infozip_test.$$"
 mkdir -p "$WORK/in"
-trap 'rm -rf "$WORK"' EXIT
+trap 'command rm -rf "$WORK" 2>/dev/null' EXIT
 
 PASS=0
 FAIL=0

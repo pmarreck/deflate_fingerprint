@@ -25,7 +25,7 @@ fi
 
 WORK="${TMPDIR:-/tmp}/dfp_real_zlib_test.$$"
 mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+trap 'command rm -rf "$WORK" 2>/dev/null' EXIT
 
 # Build the generator (needs libz from the nix devshell).
 GEN="$WORK/gen_zlib_target"

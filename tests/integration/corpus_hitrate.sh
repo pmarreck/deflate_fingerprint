@@ -25,7 +25,7 @@ fi
 
 WORK="${TMPDIR:-/tmp}/dfp_corpus_test.$$"
 mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+trap 'command rm -rf "$WORK" 2>/dev/null' EXIT
 
 GEN="$WORK/gen_zlib_target"
 if ! cc -Wall -O2 "$GEN_SRC" -lz -o "$GEN" 2>"$WORK/gen_build.log"; then
