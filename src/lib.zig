@@ -62,14 +62,17 @@ pub const IdentifyResult = struct {
     fingerprint_id: u16,
     /// Confidence tier.
     confidence: Confidence,
-    /// For `near_match`: number of bytes that differed between our best-
-    /// candidate reproduction and the target. 0 for `byte_exact`.
+    /// Bytes not yet reproduced. For `byte_exact`: 0. For `no_match` (total
+    /// miss, fingerprint_id == 0): `target.len`. For `near_match`: number of
+    /// bytes that differed between our best-candidate reproduction and target.
     residual_bytes: usize,
 };
 
 pub const Confidence = enum(u8) {
     byte_exact = 0,
     near_match = 1,
+    /// No registered fingerprint reproduced the target. residual_bytes = target.len.
+    no_match = 2,
 };
 
 /// Owned result for config-level fingerprinting. This is the shape the project
@@ -194,11 +197,11 @@ pub const FINGERPRINTS = [_]Fingerprint{
 /// Identify which registered fingerprint reproduces `target` from `raw`.
 /// Iterates `FINGERPRINTS` and returns the first byte-exact match.
 ///
-/// If no fingerprint matches, returns `{ id=0, confidence=near_match,
-/// residual_bytes=<bytes of `target` we couldn't reproduce with any
-/// candidate's output of the same length, summed over candidates>` — for
-/// v0.1 we just report 0; richer residual scoring lives behind a future
-/// option struct.
+/// If no fingerprint matches, returns `{ id=0, confidence=no_match,
+/// residual_bytes=target.len }` — a total miss is reported as the whole
+/// target being unreproduced, distinct from a `byte_exact` (residual 0)
+/// result. Richer per-candidate residual scoring (for a `near_match` tier)
+/// lives behind a future option struct.
 pub fn identify(
     allocator: std.mem.Allocator,
     raw: []const u8,
@@ -217,8 +220,8 @@ pub fn identify(
     }
     return .{
         .fingerprint_id = 0,
-        .confidence = .near_match,
-        .residual_bytes = 0,
+        .confidence = .no_match,
+        .residual_bytes = target.len,
     };
 }
 
@@ -696,6 +699,7 @@ test "version is well-formed" {
 test "Confidence enum values are stable" {
     try std.testing.expectEqual(@as(u8, 0), @intFromEnum(Confidence.byte_exact));
     try std.testing.expectEqual(@as(u8, 1), @intFromEnum(Confidence.near_match));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(Confidence.no_match));
 }
 
 test "dfp_identify: garbage raw/target reports id=0 (no match)" {
@@ -705,7 +709,16 @@ test "dfp_identify: garbage raw/target reports id=0 (no match)" {
     const rc = dfp_identify(&raw, raw.len, &target, target.len, &out);
     try std.testing.expectEqual(@as(i32, 0), rc);
     try std.testing.expectEqual(@as(u16, 0), out.fingerprint_id);
-    try std.testing.expectEqual(@intFromEnum(Confidence.near_match), out.confidence);
+    try std.testing.expectEqual(@intFromEnum(Confidence.no_match), out.confidence);
+}
+
+test "identify: total miss reports residual_bytes == target.len" {
+    const raw = "Hello, world!";
+    const target = [_]u8{ 0, 1, 2 };
+    const result = try identify(std.testing.allocator, raw, &target);
+    try std.testing.expectEqual(@as(u16, 0), result.fingerprint_id);
+    try std.testing.expectEqual(@as(usize, target.len), result.residual_bytes);
+    try std.testing.expectEqual(Confidence.no_match, result.confidence);
 }
 
 test "dfp_identify: 'Hello, world!' compressed at level=0 is identified as fingerprint #1" {

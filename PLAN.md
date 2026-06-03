@@ -6,6 +6,16 @@
 - [x] Test harness counts passes correctly (`zig build test --summary all`); fixed scaffold bug where Garnix `checks` were nested at `checks.<sys>.<sys>` and silently skipped; added `pkgs.zlib` to flake devShell + test derivation as test-time oracle (2026-05-21)
 - [ ] Initialize git, push to `pmarreck/deflate_fingerprint` GitHub repo (public, MIT, Garnix will auto-evaluate `packages.default` + `checks.{build,test}`)
 
+
+## Fleet code review triage (2026-06-01)
+Suite grew 119 → 131 tests (+12). All green.
+- [x] WARN: `identify` total-miss now returns `confidence=no_match` (new `Confidence` variant = 2) + `residual_bytes=target.len`, distinct from a byte_exact (residual 0) result. Updated FFI struct passthrough, C header (`DFP_CONFIDENCE_NO_MATCH`), `IdentifyResult`/`identify` docstrings, and tests (enum-stability, FFI no-match, Zig-API total-miss). (2026-06-01)
+- [x] WARN: Exhaustive RFC 1951 §3.2.5 tests for `lengthCode` (3..258) and `distanceCode` (1..32768) via independent table reconstruction (not a copy of the impl table); covers the length-258 / code-285 special case the reviewer worried about. (src/blocks.zig) (2026-06-01)
+- [x] WARN: bitstream.zig: 0 → 6 tests (LSB-first single-bit packing, >1-byte value straddle, zero-pad flush, idempotent/empty flush, mixed-width round-trip through an inline LSB-first reader). (2026-06-01)
+- [x] WARN: match.zig edge cases — token-stream reconstruction oracle over repeated-byte/low-entropy/pseudo-random inputs for greedy AND lazy tokenizers, plus a MAX_DIST window-boundary rejection test (asserts no back-reference exceeds maxDist). (2026-06-01)
+- [ ] INFO (deferred, needs Peter's go-ahead per refactor-consent rule): `encodeZlibLevel{N}[Mem{M}]` wrappers in encoder.zig confirmed as thin shims over `encodeZlib{Fast,Slow}MemLevel`, BUT each is load-bearing as a named `.encode` fn-pointer in the FINGERPRINTS registry (lib.zig) and several carry rationale doc comments.
+      - Safe: leave as-is (explicit, documented, greppable from the registry).
+      - Bold: replace with a comptime factory `fn zlibFast(comptime level, comptime mem) ...` inlined at registry call sites; eliminates ~20 wrappers but loses per-wrapper doc comments.
 ## v0.1 — Minimal viable (zlib coverage)
 
 - [x] First DEFLATE primitive landed: `encodeFixedHuffmanLiterals` in `src/encoder.zig` — RFC 1951 §3.2.6 fixed-Huffman block with literals only. LSB-first `BitWriter`, 9 byte-exact tests vs real zlib 1.3.2. Note: this is the FIXED branch of the eventual `encodeZlibHuffmanOnly` dispatcher — a partial fingerprint useful for *detection*, not yet sufficient for full HUFFMAN_ONLY reproduction (see ENCODER_NOTES.md for the corrected 3-way model). 2026-05-21

@@ -24,6 +24,7 @@ extern "C" {
 
 #define DFP_CONFIDENCE_BYTE_EXACT  0  /* encoder reproduced target exactly  */
 #define DFP_CONFIDENCE_NEAR_MATCH  1  /* best candidate diverged by N bytes */
+#define DFP_CONFIDENCE_NO_MATCH    2  /* no registered fingerprint matched  */
 
 /* ── Explicit reproduction config constants ───────────────────────────── */
 
@@ -47,7 +48,7 @@ typedef struct {
     uint16_t fingerprint_id;   /* 0 = no match in registry          */
     uint8_t  confidence;       /* DFP_CONFIDENCE_*                  */
     uint8_t  _pad;             /* reserved; always 0                */
-    size_t   residual_bytes;   /* 0 iff confidence == BYTE_EXACT    */
+    size_t   residual_bytes;   /* BYTE_EXACT: 0; NO_MATCH: target_len */
 } dfp_result_t;
 
 /* ── Explicit DEFLATE reproduction config ─────────────────────────────── */

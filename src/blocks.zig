@@ -570,3 +570,78 @@ test "token-only multi-block helpers tolerate cross-chunk match references" {
     defer std.testing.allocator.free(fixed);
     try std.testing.expect(fixed.len > 0);
 }
+
+test "lengthCode covers RFC 1951 §3.2.5 length table exhaustively" {
+    // Independent reconstruction of the canonical length-code table, compared
+    // against the implementation for every match length 3..258. Catches any
+    // off-by-one in the `.base` values — the classic DEFLATE pitfall is that
+    // code 284 covers lengths 227..257 (31 values, extra 5) while length 258
+    // gets its own zero-extra code 285.
+    var code: u16 = 257;
+    var len: u16 = 3;
+    while (code <= 264) : (code += 1) {
+        const r = lengthCode(len);
+        try std.testing.expectEqual(code, r.code);
+        try std.testing.expectEqual(@as(u8, 0), r.extra_bits);
+        try std.testing.expectEqual(@as(u16, 0), r.extra_val);
+        len += 1;
+    }
+    var nbits: u8 = 1;
+    outer: while (nbits <= 5) : (nbits += 1) {
+        var g: u8 = 0;
+        while (g < 4) : (g += 1) {
+            const span: u16 = @as(u16, 1) << @as(u4, @intCast(nbits));
+            var k: u16 = 0;
+            while (k < span) : (k += 1) {
+                if (len > 257) break :outer; // length 258 is the special case below
+                const r = lengthCode(len);
+                try std.testing.expectEqual(code, r.code);
+                try std.testing.expectEqual(nbits, r.extra_bits);
+                try std.testing.expectEqual(k, r.extra_val);
+                len += 1;
+            }
+            code += 1;
+        }
+    }
+    const last = lengthCode(258);
+    try std.testing.expectEqual(@as(u16, 285), last.code);
+    try std.testing.expectEqual(@as(u8, 0), last.extra_bits);
+    try std.testing.expectEqual(@as(u16, 0), last.extra_val);
+    // Guard against a vacuous walk: confirm we reached the special case at 258
+    // having stopped on code 284.
+    try std.testing.expectEqual(@as(u16, 258), len);
+    try std.testing.expectEqual(@as(u16, 284), code);
+}
+
+test "distanceCode covers RFC 1951 §3.2.5 distance table exhaustively" {
+    // Independent reconstruction of the canonical distance-code table for every
+    // distance 1..32768. Distances have no special-case (unlike lengths): 30
+    // codes cover exactly 32768 distances.
+    var code: u8 = 0;
+    var dist: u32 = 1;
+    while (code <= 3) : (code += 1) {
+        const r = distanceCode(@intCast(dist));
+        try std.testing.expectEqual(code, r.code);
+        try std.testing.expectEqual(@as(u8, 0), r.extra_bits);
+        try std.testing.expectEqual(@as(u16, 0), r.extra_val);
+        dist += 1;
+    }
+    var nbits: u8 = 1;
+    while (nbits <= 13) : (nbits += 1) {
+        var p: u8 = 0;
+        while (p < 2) : (p += 1) {
+            const span: u32 = @as(u32, 1) << @as(u5, @intCast(nbits));
+            var k: u32 = 0;
+            while (k < span) : (k += 1) {
+                const r = distanceCode(@intCast(dist));
+                try std.testing.expectEqual(code, r.code);
+                try std.testing.expectEqual(nbits, r.extra_bits);
+                try std.testing.expectEqual(@as(u16, @intCast(k)), r.extra_val);
+                dist += 1;
+            }
+            code += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(u32, 32769), dist);
+    try std.testing.expectEqual(@as(u8, 30), code);
+}

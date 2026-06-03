@@ -668,3 +668,82 @@ test "enumerateVisibleMatchesSlowChunked replays zlib delayed inserts across flu
 
     try testing.expect(findMatch(candidates, .{ .length = 3, .distance = 2 }) != null);
 }
+
+// ── Test helpers: token-stream reconstruction as a correctness oracle ──────
+// A tokenizer is correct iff replaying its literal/back-reference stream
+// reproduces the input byte-for-byte. This is the robust invariant that holds
+// regardless of greedy-vs-lazy decisions, so it catches off-by-one errors in
+// match length/distance and window-boundary handling without pinning the exact
+// token choices.
+
+fn fillLcg(buf: []u8, seed: u32) void {
+    var s = seed;
+    for (buf) |*b| {
+        s = s *% 1664525 +% 1013904223;
+        b.* = @truncate(s >> 24);
+    }
+}
+
+fn expectReconstructs(raw: []const u8, tokens: []const Token, params: LZ77Params) !void {
+    const A = std.testing.allocator;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(A);
+    for (tokens) |tok| switch (tok) {
+        .literal => |b| try out.append(A, b),
+        .match => |m| {
+            try std.testing.expect(m.length >= params.min_match and m.length <= params.max_match);
+            try std.testing.expect(m.distance >= 1 and m.distance <= out.items.len);
+            try std.testing.expect(m.distance <= maxDist(params));
+            const start = out.items.len - m.distance;
+            var i: usize = 0;
+            while (i < m.length) : (i += 1) try out.append(A, out.items[start + i]);
+        },
+    };
+    try std.testing.expectEqualSlices(u8, raw, out.items);
+}
+
+test "match: greedy token streams reconstruct the original across input shapes" {
+    const A = std.testing.allocator;
+    var rng: [1024]u8 = undefined;
+    fillLcg(&rng, 12345);
+    const repeated = "a" ** 300; // RLE-friendly: many distance-1 overlapping matches
+    const cyclic = "abcabcabcabcabcabcabc" ** 30; // low-entropy periodic
+    const inputs = [_][]const u8{ "", "ab", repeated, cyclic, &rng };
+    const params = [_]LZ77Params{ LZ77_LEVEL_1, LZ77_LEVEL_6, LZ77_LEVEL_9 };
+    for (inputs) |inp| for (params) |p| {
+        const tokens = try lz77Tokenize(A, inp, p);
+        defer A.free(tokens);
+        try expectReconstructs(inp, tokens, p);
+    };
+}
+
+test "match: lazy (deflate_slow) token streams reconstruct the original" {
+    const A = std.testing.allocator;
+    var rng: [1024]u8 = undefined;
+    fillLcg(&rng, 999);
+    const cyclic = "the quick brown fox " ** 40;
+    const inputs = [_][]const u8{ cyclic, &rng, "a" ** 300 };
+    const params = [_]LZ77Params{ LZ77_LEVEL_6, LZ77_LEVEL_9 };
+    for (inputs) |inp| for (params) |p| {
+        const slow = try lz77TokenizeSlow(A, inp, p);
+        defer A.free(slow);
+        try expectReconstructs(inp, slow, p);
+    };
+}
+
+test "match: matches never exceed MAX_DIST near the window boundary" {
+    const A = std.testing.allocator;
+    var buf: [1200]u8 = undefined;
+    fillLcg(&buf, 7);
+    var pat: [20]u8 = undefined;
+    @memcpy(&pat, buf[0..20]);
+    @memcpy(buf[100..120], &pat); // copy is within MAX_DIST(512)=250
+    @memcpy(buf[900..920], &pat); // copy is beyond MAX_DIST: must be rejected
+    var p = LZ77_LEVEL_6;
+    p.window_size = 512;
+    const tokens = try lz77Tokenize(A, &buf, p);
+    defer A.free(tokens);
+    // expectReconstructs asserts every match distance <= maxDist(p) AND exact
+    // reconstruction, so an over-long back-reference would fail here.
+    try expectReconstructs(&buf, tokens, p);
+}

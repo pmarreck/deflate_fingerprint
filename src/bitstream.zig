@@ -118,3 +118,84 @@ pub fn writeFixedLengthCode(bw: *BitWriter, code: u16) !void {
 pub fn writeFixedDistanceCode(bw: *BitWriter, code: u8) !void {
     try bw.writeBits(reverseBits(code, 5), 5);
 }
+
+test "bitstream: single bits pack LSB-first" {
+    var bw = BitWriter.init(std.testing.allocator);
+    defer bw.deinit();
+    try bw.writeBits(1, 1);
+    try bw.writeBits(0, 1);
+    try bw.writeBits(1, 1);
+    try bw.flush();
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x05}, bw.bytes.items);
+}
+
+test "bitstream: flush zero-pads the final partial byte" {
+    var bw = BitWriter.init(std.testing.allocator);
+    defer bw.deinit();
+    try bw.writeBits(0b111, 3);
+    try bw.flush();
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x07}, bw.bytes.items);
+}
+
+test "bitstream: a value wider than a byte splits across byte boundaries LSB-first" {
+    var bw = BitWriter.init(std.testing.allocator);
+    defer bw.deinit();
+    try bw.writeBits(0xABC, 12);
+    try bw.flush();
+    // low 8 bits (0xBC) land in the first byte, the remaining 4 bits (0xA) in
+    // the low nibble of the next, zero-padded.
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xBC, 0x0A }, bw.bytes.items);
+}
+
+test "bitstream: small writes straddle a byte boundary" {
+    var bw = BitWriter.init(std.testing.allocator);
+    defer bw.deinit();
+    try bw.writeBits(1, 1);
+    try bw.writeBits(0xFF, 8);
+    try bw.flush();
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xFF, 0x01 }, bw.bytes.items);
+}
+
+test "bitstream: flush is idempotent and a no-op when no bits are pending" {
+    var bw = BitWriter.init(std.testing.allocator);
+    defer bw.deinit();
+    try bw.flush(); // nothing pending
+    try std.testing.expectEqual(@as(usize, 0), bw.bytes.items.len);
+    try bw.writeBits(1, 1);
+    try bw.flush();
+    try bw.flush(); // idempotent: second flush adds nothing
+    try std.testing.expectEqualSlices(u8, &[_]u8{0x01}, bw.bytes.items);
+}
+
+test "bitstream: mixed-width writes round-trip through an LSB-first reader" {
+    const Pair = struct { value: u32, nbits: u6 };
+    const pairs = [_]Pair{
+        .{ .value = 0, .nbits = 1 },
+        .{ .value = 1, .nbits = 1 },
+        .{ .value = 0b11, .nbits = 2 },
+        .{ .value = 0xABC, .nbits = 12 },
+        .{ .value = 1, .nbits = 1 },
+        .{ .value = 0xFF, .nbits = 8 },
+        .{ .value = 0x5A5, .nbits = 11 },
+        .{ .value = 0, .nbits = 5 },
+    };
+    var bw = BitWriter.init(std.testing.allocator);
+    defer bw.deinit();
+    for (pairs) |p| try bw.writeBits(p.value, p.nbits);
+    const out = try bw.toOwnedSlice();
+    defer std.testing.allocator.free(out);
+
+    var bit_pos: usize = 0;
+    for (pairs) |p| {
+        var got: u32 = 0;
+        var i: u6 = 0;
+        while (i < p.nbits) : (i += 1) {
+            const byte = out[bit_pos >> 3];
+            const bit: u32 = (byte >> @as(u3, @intCast(bit_pos & 7))) & 1;
+            got |= bit << @as(u5, @intCast(i));
+            bit_pos += 1;
+        }
+        const mask: u32 = if (p.nbits == 32) 0xFFFF_FFFF else (@as(u32, 1) << @as(u5, @intCast(p.nbits))) - 1;
+        try std.testing.expectEqual(p.value & mask, got);
+    }
+}
