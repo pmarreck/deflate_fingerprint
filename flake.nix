@@ -4,24 +4,22 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Pin Zig explicitly via mitchellh/zig-overlay, which exposes every
-    # release as a named attr. Even though nixpkgs-unstable currently
-    # tracks 0.16 too, pinning here insulates this project from upstream
-    # nixpkgs jumping again unannounced.
-    zig-overlay = {
-      url = "github:mitchellh/zig-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, zig-overlay }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
         pname = "deflate_fingerprint";
         version = "0.1.0";
-        # Pinned to 0.16.0 ("Juicy Main", April 2026).
-        zigPkg = zig-overlay.packages.${system}."0.16.0";
+        # Pinned to the 0.16 series by attribute name; flake.lock pins the
+        # exact build. Use nixpkgs' source-built Zig rather than a prebuilt
+        # binary: nixpkgs compiles its coreutils `env` path into the
+        # compiler's native-ABI probe. A prebuilt compiler probes
+        # /usr/bin/env, which the Linux build sandbox lacks, then silently
+        # targets musl and emits test binaries whose /lib/ld-musl interpreter
+        # does not exist (zig build test: FileNotFound).
+        zigPkg = pkgs.zig_0_16;
       in {
         packages.default = pkgs.stdenv.mkDerivation {
           inherit pname version;
@@ -39,7 +37,7 @@
 
         # NOTE: don't key on ${system} here — flake-utils.eachDefaultSystem
         # already wraps the returned attrs in ${system}. Writing
-        # `checks.${system} = ...` produces checks.<sys>.<sys>, which Garnix
+        # `checks.${system} = ...` produces checks.<sys>.<sys>, which CI
         # silently skips. The same applies to packages/devShells (already
         # correctly bare above).
         checks = {
@@ -69,7 +67,9 @@
         devShells.default = pkgs.mkShell {
           # zlib is test-time only (oracle for byte-exact comparison against
           # real zlib output); never a runtime dep of the library or CLI.
-          packages = [ zigPkg pkgs.hyperfine pkgs.zlib pkgs.zip ];
+          # ruby generates deterministic Info-ZIP fixture inputs in
+          # tests/integration/infozip_roundtrip.sh.
+          packages = [ zigPkg pkgs.hyperfine pkgs.zlib pkgs.zip pkgs.ruby ];
         };
       });
 }

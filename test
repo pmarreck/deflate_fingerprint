@@ -27,7 +27,9 @@ run_suite() {
 	#   - Zig --summary all failure: "N pass, N fail (M total)"
 	# So we accept "pass" and "passed" (and the same for fail).
 	pass=$(echo "$output" | grep -oE '[0-9]+(/[0-9]+)?( tests?)? pass(ed)?' | head -1 | grep -oE '^[0-9]+' || echo "0")
-	fail=$(echo "$output" | grep -oE '[0-9]+( tests?)? fail(ed)?' | head -1 | grep -oE '^[0-9]+' || echo "0")
+	# Last match: a suite's own summary line comes last, while earlier FAIL
+	# messages can contain text like "zip -6 failed".
+	fail=$(echo "$output" | grep -oE '[0-9]+( tests?)? fail(ed)?' | tail -1 | grep -oE '^[0-9]+' || echo "0")
 	if [[ $rc -ne 0 && "$fail" == "0" ]]; then
 		fail=1
 	fi

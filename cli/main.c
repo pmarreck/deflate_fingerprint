@@ -13,6 +13,10 @@
  * SPDX-License-Identifier: MIT
  */
 
+/* `fileno` is POSIX, not ISO C; strict -std=c11 headers (musl, glibc) hide it
+ * unless a POSIX feature level is requested. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
