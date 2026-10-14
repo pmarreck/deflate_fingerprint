@@ -4,6 +4,7 @@ depth=2
 max_lines=80
 
 annotate=[
+	.mechatron-prime/targets = Mechatron Prime CI flake targets built on every push
 	DESIGN.md = Design doc: includes event-level correction stream rationale and per-stream storage economics.
 	LEARNINGS.md = Session learnings including token-level residual requirement and environment/build observations.
 	PLAN.md = Running checklist: includes token/event correction stream and storage economics tasks.

@@ -22,7 +22,7 @@
 - [ ] Extend PNG IDAT metadata capture follow-up: optionally validate chunk CRCs and report IDAT chunk-size topology for upstream whole-file restoration tests
 - [ ] Add PDF FlateDecode probe: walk PDF object streams/streams with `/FlateDecode`, extract raw DEFLATE payloads, and preserve object-level metadata for byte-exact integration tests
 - [ ] Add iWork probe: inspect `.pages` / `.numbers` / `.key` package structure and extract embedded DEFLATE streams for the same fingerprint/config path
-- [ ] Mechatron Prime CI: add `.mechatron-prime/targets`, webhook and badge via the mechatron-ci skill; green on `packages.default` + `checks.test`
+- [ ] Mechatron Prime CI: manifest, webhook and badge added 2026-10-14; confirm first build PASSING on `packages.default` + `checks.test`
 - [ ] Cross-compile for 5 OS/arch combos (Mac aarch64, Linux aarch64/x86_64, Windows aarch64/x86_64)
 - [ ] Initial release v0.1.0
 

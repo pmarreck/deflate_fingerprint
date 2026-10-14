@@ -1,5 +1,9 @@
 # deflate_fingerprint
 
+[![Mechatron Prime CI](https://img.shields.io/endpoint?url=https%3A%2F%2Fthelio-nixos.tail66c90.ts.net%2Fbadges%2Fdeflate_fingerprint.json&style=for-the-badge)](https://thelio-nixos.tail66c90.ts.net/mechatron-prime/)
+
+Continuous integration runs on Mechatron Prime CI, a self-hosted Nix build service that builds the flake targets listed in `.mechatron-prime/targets` on every push.
+
 Identify and reproduce the DEFLATE encoder configuration that produced a
 compressed byte stream.
 
