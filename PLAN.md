@@ -22,7 +22,7 @@
 - [ ] Extend PNG IDAT metadata capture follow-up: optionally validate chunk CRCs and report IDAT chunk-size topology for upstream whole-file restoration tests
 - [ ] Add PDF FlateDecode probe: walk PDF object streams/streams with `/FlateDecode`, extract raw DEFLATE payloads, and preserve object-level metadata for byte-exact integration tests
 - [ ] Add iWork probe: inspect `.pages` / `.numbers` / `.key` package structure and extract embedded DEFLATE streams for the same fingerprint/config path
-- [ ] Mechatron Prime CI: manifest, webhook and badge added 2026-10-14; confirm first build PASSING on `packages.default` + `checks.test`
+- [x] Mechatron Prime CI: manifest, webhook and badge; first build of b40c247 PASSING on `packages.default` + `checks.test` (done 2026-10-14 19:21 EDT)
 - [ ] Cross-compile for 5 OS/arch combos (Mac aarch64, Linux aarch64/x86_64, Windows aarch64/x86_64)
 - [ ] Initial release v0.1.0
 
@@ -82,7 +82,6 @@
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
 - [ ] PNG IDAT miss follow-up: model exact row partial-flush semantics for row-sized fixed/dynamic blocks with empty fixed markers; remaining sampled row-like misses have raw block spans equal to PNG filtered scanline sizes (`ceil(width * channels * bit_depth / 8) + 1`). Real zlib L6/default `Z_PARTIAL_FLUSH` per scanline matches block topology but diverges on individual LZ77 choices, so this likely needs either a parser-variant knob or token-level correction.
-- [x] Add legal LZ77 match-candidate enumeration for token-divergence diagnostics; PNG row misses now report whether the target match is legal and its rank among alternatives (2026-05-26 EDT).
 - [x] Extend candidate-rank diagnostics from all legal raw matches to zlib-style hash-chain-visible candidates; diagnostic now reports both continuous-prefix and row-chunked visibility for PNG row misses (2026-05-26 EDT).
 - [x] Close the zlib row-flush state-model gap: row-chunked replay now models zlib's delayed `insert` carry across `Z_PARTIAL_FLUSH`, so both target and real-zlib choices are visible at the remaining PNG row divergences (2026-05-26 EDT).
 - [ ] PNG row-partial-flush residual: both remaining target choices are legal and row-visible but lower-ranked than zlib's default lazy-parser choices, so investigate parser-choice knobs or token-level correction rather than more block/flush state.
