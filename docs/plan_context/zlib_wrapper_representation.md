@@ -18,3 +18,5 @@ Options recorded at the time, plus the older v0.1 item about module layout:
 
 The project's refactor rule requires BDFN (Benevolent Dictator For Now) to choose between
 safe and bold refactors, so this stays open until that choice is made.
+
+Resolution (2026-10-20): BDFN shelved the project until further notice, so no refactor is planned. The existing named wrappers remain.

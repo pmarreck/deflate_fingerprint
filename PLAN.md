@@ -1,9 +1,11 @@
 # deflate_fingerprint — Plan
 
+SHELVED by BDFN (Benevolent Dictator For Now) on 2026-10-20 until further notice. Start no new work here without BDFN's explicit go-ahead.
+
 ## In Progress
 - [x] Initialize git and push to the public `pmarreck/deflate_fingerprint` GitHub repo (remote tracking `origin/yolo` confirmed 2026-10-14)
 - [x] Fix Nix sandbox builds: `checks.test` and `packages.default` fail (prebuilt Zig falls back to musl; CLI `fileno` under strict C11); switch to nixpkgs `zig_0_16` + `_POSIX_C_SOURCE`; also add ruby to dev shell for Info-ZIP fixtures and fix ./test failure-count misparse (done 2026-10-14 16:30 EDT)
-- [ ] Owner decision pending (walking id `deflate_fingerprint-zlib-wrapper-representation` r1): keep, factory-ize, or table-ize zlib wrappers (context: docs/plan_context/zlib_wrapper_representation.md)
+- [x] zlib wrapper representation decision: superseded by shelving; current named wrappers stay (context: docs/plan_context/zlib_wrapper_representation.md) (done 2026-10-20 15:50 EDT)
 
 ## Fleet code review triage (2026-06-01)
 - [x] WARN: `identify` total-miss returns `confidence=no_match` + `residual_bytes=target.len`; FFI, C header and tests updated (2026-06-01)
@@ -82,7 +84,6 @@
 - [ ] Adversarial inputs / fingerprint forgery — security model for forensic use
 - [ ] PNG IDAT-specific coverage: DEFLATE reproduction is required; PNG row filters and IDAT chunking are adapter/upstream metadata, but must be captured in tests for whole-file bit-exact restoration
 - [ ] PNG IDAT miss follow-up: model exact row partial-flush semantics for row-sized fixed/dynamic blocks with empty fixed markers; remaining sampled row-like misses have raw block spans equal to PNG filtered scanline sizes (`ceil(width * channels * bit_depth / 8) + 1`). Real zlib L6/default `Z_PARTIAL_FLUSH` per scanline matches block topology but diverges on individual LZ77 choices, so this likely needs either a parser-variant knob or token-level correction.
-- [x] Extend candidate-rank diagnostics from all legal raw matches to zlib-style hash-chain-visible candidates; diagnostic now reports both continuous-prefix and row-chunked visibility for PNG row misses (2026-05-26 EDT).
 - [x] Close the zlib row-flush state-model gap: row-chunked replay now models zlib's delayed `insert` carry across `Z_PARTIAL_FLUSH`, so both target and real-zlib choices are visible at the remaining PNG row divergences (2026-05-26 EDT).
 - [ ] PNG row-partial-flush residual: both remaining target choices are legal and row-visible but lower-ranked than zlib's default lazy-parser choices, so investigate parser-choice knobs or token-level correction rather than more block/flush state.
 - [x] PNG IDAT miss follow-up: resolve the single dynamic 59x32 16-bit RGBA stream; exact real-zlib oracle is `windowBits=14`, level 7, memLevel 7, `Z_FILTERED`, now represented as a generic configured candidate. Private 25-PNG sample improved from 88.0% to 92.0% exact (23/25) (2026-05-26 EDT).

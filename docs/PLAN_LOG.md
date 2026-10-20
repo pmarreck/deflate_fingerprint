@@ -60,3 +60,7 @@ Completed PLAN.md items retired by plan-retire, oldest retirement first.
 - [x] [Corpus / Fingerprint Pipeline] Study precomp/preflate/preflate-rs/grittibanzli/reflate behavior and document which correction-stream ideas are compatible with this project's RFC 1951-only core and C FFI; see `docs/PRIOR_ART.md` (2026-05-26 EDT)
 - [x] [Corpus / Fingerprint Pipeline] Define how DFP must exceed prior art: forensic attribution, transparent registry, embeddable Zig/C FFI, measured corpus coverage, container-agnostic RFC 1951 core, native fallback economics, and explainable evidence trail (2026-05-26 EDT)
 - [x] [Open research questions (track here, address as discovered)] Add legal LZ77 match-candidate enumeration for token-divergence diagnostics; PNG row misses now report whether the target match is legal and its rank among alternatives (2026-05-26 EDT).
+
+## Retired 2026-10-20
+
+- [x] [Open research questions (track here, address as discovered)] Extend candidate-rank diagnostics from all legal raw matches to zlib-style hash-chain-visible candidates; diagnostic now reports both continuous-prefix and row-chunked visibility for PNG row misses (2026-05-26 EDT).
